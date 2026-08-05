@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+  <rect width="1600" height="900" fill="#090a0b"/>
+  <g fill="#efede7" font-family="Arial, Helvetica, sans-serif">
+    <text x="80" y="85" font-size="44" font-weight="700">AFTERFRAME — SYSTEM ARCHITECTURE</text>
+    <text x="82" y="120" font-size="17" fill="#8f8e89">Evidence-grounded exploration pipeline</text>
+  </g>
+  <g stroke="#3b3c3d" stroke-width="2" fill="none">
+    <path d="M190 250 H440"/><path d="M610 250 H850"/><path d="M1020 250 H1270"/>
+    <path d="M935 310 V430"/><path d="M935 550 V670"/>
+    <path d="M350 710 H730"/><path d="M1140 710 H1310"/>
+    <path d="M730 710 C850 710 820 490 850 490"/>
+  </g>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <g><text x="80" y="238" fill="#d1b36a" font-size="14">01</text><text x="110" y="238" fill="#efede7" font-size="25">USER INTENT</text><text x="110" y="270" fill="#8f8e89" font-size="15">film · curiosity · style · history</text></g>
+    <g><text x="450" y="238" fill="#d1b36a" font-size="14">02</text><text x="480" y="238" fill="#efede7" font-size="25">ORCHESTRATOR</text><text x="480" y="270" fill="#8f8e89" font-size="15">state machine · research plan</text></g>
+    <g><text x="860" y="238" fill="#d1b36a" font-size="14">03</text><text x="890" y="238" fill="#efede7" font-size="25">SOURCE PIPELINE</text><text x="890" y="270" fill="#8f8e89" font-size="15">scout · resolve · extract · verify</text></g>
+    <g><text x="1280" y="238" fill="#d1b36a" font-size="14">04</text><text x="1310" y="238" fill="#efede7" font-size="25">EVIDENCE GRAPH</text><text x="1310" y="270" fill="#8f8e89" font-size="15">claims · entities · contradictions</text></g>
+    <g><text x="790" y="465" fill="#d1b36a" font-size="14">05</text><text x="820" y="465" fill="#efede7" font-size="25">NARRATIVE DIRECTOR</text><text x="820" y="497" fill="#8f8e89" font-size="15">next beats · pacing · branches</text></g>
+    <g><text x="790" y="705" fill="#d1b36a" font-size="14">06</text><text x="820" y="705" fill="#efede7" font-size="25">EXPLORATION STREAM</text><text x="820" y="737" fill="#8f8e89" font-size="15">text · evidence whispers · source inspector</text></g>
+    <g><text x="80" y="705" fill="#d1b36a" font-size="14">07</text><text x="110" y="705" fill="#efede7" font-size="25">DIRECTION + NOTES</text><text x="110" y="737" fill="#8f8e89" font-size="15">branch · annotate · connect · remember</text></g>
+    <g><text x="1320" y="705" fill="#d1b36a" font-size="14">08</text><text x="1350" y="705" fill="#efede7" font-size="25">WORLD + CLOSURE</text><text x="1350" y="737" fill="#8f8e89" font-size="15">graph · visual script · dossier · portals</text></g>
+  </g>
+  <text x="80" y="845" fill="#666762" font-family="Arial" font-size="14">The model never owns the citation URL. Resolver services validate and attach locators after model output.</text>
+</svg>

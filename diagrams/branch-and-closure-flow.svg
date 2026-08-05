@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+  <rect width="1600" height="900" fill="#090a0b"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text x="80" y="86" fill="#efede7" font-size="44" font-weight="700">DIRECTION → BRANCH → CLOSURE</text>
+    <text x="82" y="122" fill="#8f8e89" font-size="17">The input is an instrument. The investigation is the response.</text>
+  </g>
+  <g stroke="#3b3c3d" stroke-width="2" fill="none">
+    <path d="M210 300 H440"/><path d="M610 300 H840"/><path d="M1010 300 H1250"/>
+    <path d="M1340 355 V575"/><path d="M1260 650 H1010"/><path d="M840 650 H610"/><path d="M440 650 H220"/>
+  </g>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <g transform="translate(80 250)"><text fill="#d1b36a" font-size="14">01</text><text x="30" fill="#efede7" font-size="27">USER DIRECTION</text><text x="30" y="38" fill="#8f8e89" font-size="15">theory · question · lead · challenge</text></g>
+    <g transform="translate(450 250)"><text fill="#d1b36a" font-size="14">02</text><text x="30" fill="#efede7" font-size="27">ROUTE</text><text x="30" y="38" fill="#8f8e89" font-size="15">create · redirect · deepen · compare</text></g>
+    <g transform="translate(850 250)"><text fill="#d1b36a" font-size="14">03</text><text x="30" fill="#efede7" font-size="27">RESEARCH</text><text x="30" y="38" fill="#8f8e89" font-size="15">support · pressure · contradict · alternatives</text></g>
+    <g transform="translate(1260 250)"><text fill="#d1b36a" font-size="14">04</text><text x="30" fill="#efede7" font-size="27">BRANCH OPENS</text><text x="30" y="38" fill="#8f8e89" font-size="15">main screen, not chat history</text></g>
+    <g transform="translate(1050 600)"><text fill="#d1b36a" font-size="14">05</text><text x="30" fill="#efede7" font-size="27">USER BUILDS</text><text x="30" y="38" fill="#8f8e89" font-size="15">notes · links · accepted theories</text></g>
+    <g transform="translate(650 600)"><text fill="#d1b36a" font-size="14">06</text><text x="30" fill="#efede7" font-size="27">CLOSE REVIEW</text><text x="30" y="38" fill="#8f8e89" font-size="15">unknowns · contradictions · weak locators</text></g>
+    <g transform="translate(240 600)"><text fill="#d1b36a" font-size="14">07</text><text x="30" fill="#efede7" font-size="27">CREATE OR PRESERVE</text><text x="30" y="38" fill="#8f8e89" font-size="15">case world · visual script · dossier · reopen</text></g>
+  </g>
+  <text x="80" y="842" fill="#666762" font-family="Arial" font-size="14">Every generated closure block retains its note, branch, claim, evidence, and source-locator inputs.</text>
+</svg>
