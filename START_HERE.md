@@ -25,13 +25,14 @@ Do not implement until you can explain all four statements:
 
 `prototype/`, the current starter components, diagrams, storyboards, and premium visual specifications are vision experiments. They may suggest atmosphere or interaction hypotheses, but they do not prescribe the production interface.
 
-The existing starter is a mocked vertical slice, not a production research engine. It is useful for inspecting ideas and salvaging small pieces, but its UI shape, mock evidence model, routes, and migrations are not architecture truth.
+The existing starter UI is a mocked vertical slice, not a production research engine. The parallel production domain/application slice is tracked in `docs/44-build-checkpoint-01.md`; its boundaries, not the mock UI types or routes, are the implementation starting point.
 
 To run it:
 
 ```bash
 cd starter
-npm install
+nvm use
+npm ci
 cp .env.example .env.local
 npm run dev
 ```

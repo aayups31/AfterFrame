@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 const kinds = ["THOUGHT", "STICKY", "QUESTION", "CLAIM", "CONNECTION", "FLOW STEP"];
 
@@ -16,19 +16,20 @@ export function NoteComposer({
   const [kind, setKind] = useState("THOUGHT");
   const [body, setBody] = useState("");
 
-  useEffect(() => {
-    if (!open) setBody("");
-  }, [open]);
+  const closeComposer = () => {
+    setBody("");
+    onClose();
+  };
 
   if (!open) return null;
 
   return (
     <div className="note-layer" role="dialog" aria-modal="true" aria-label="Create a note">
-      <button className="note-backdrop" onClick={onClose} aria-label="Close note composer" />
+      <button className="note-backdrop" onClick={closeComposer} aria-label="Close note composer" />
       <section className="note-composer">
         <header>
           <span>NEW NOTE · {activeBeatId}</span>
-          <button onClick={onClose}>CLOSE</button>
+          <button onClick={closeComposer}>CLOSE</button>
         </header>
         <nav aria-label="Note type">
           {kinds.map((item) => (
@@ -45,7 +46,7 @@ export function NoteComposer({
         />
         <footer>
           <span>Anchored to the active passage</span>
-          <button onClick={onClose}>PLACE NOTE ↗</button>
+          <button onClick={closeComposer}>PLACE NOTE ↗</button>
         </footer>
       </section>
     </div>

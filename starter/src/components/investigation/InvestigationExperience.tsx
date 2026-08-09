@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import type { ClosureMode, DirectionType, Investigation, InvestigationBranch } from "@/lib/types";
 import { BranchExperience } from "./BranchExperience";
@@ -103,7 +104,7 @@ export function InvestigationExperience({ investigation }: { investigation: Inve
   return (
     <main className="case-shell">
       <header className="case-masthead">
-        <a href="/" className="case-brand">AFTERFRAME</a>
+        <Link href="/" className="case-brand">AFTERFRAME</Link>
         <div className="case-identity">
           <span>CASE 001</span>
           <strong>{investigation.film}</strong>

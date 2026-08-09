@@ -2,30 +2,35 @@
   "name": "afterframe-starter",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
+  "packageManager": "npm@10.8.2",
+  "engines": {
+    "node": ">=22.13.0 <23",
+    "npm": ">=10.8.2 <11"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "npm run typecheck && npm run lint && npm run test && npm run build"
   },
   "dependencies": {
-    "next": "16.2.11",
-    "openai": "latest",
-    "react": "latest",
-    "react-dom": "latest",
-    "zod": "latest"
+    "next": "16.3.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "zod": "4.4.3"
   },
   "devDependencies": {
-    "@types/node": "latest",
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
-    "eslint": "latest",
-    "eslint-config-next": "16.2.11",
-    "typescript": "latest",
-    "vitest": "latest"
+    "@types/node": "22.20.1",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.3.0",
+    "typescript": "6.0.3",
+    "vitest": "4.1.10"
   }
 }

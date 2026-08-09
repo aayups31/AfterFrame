@@ -3,3 +3,9 @@
 .env.local
 .env.*.local
 !.env.example
+
+# JavaScript build and dependency artifacts
+node_modules/
+.next/
+coverage/
+*.tsbuildinfo

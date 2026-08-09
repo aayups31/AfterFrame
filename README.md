@@ -7,7 +7,7 @@ AFTERFRAME begins with the world's best Movie Investigator and is architected to
 
 ## Read this first
 
-Start with `START_HERE.md`, then `WHY.md`, then the canonical plan in `docs/23-final-build-plan.md`. Together they lock the product truth, build order, V1 boundary, and distinction between the reusable investigation engine and the Movie Investigator.
+Start with `START_HERE.md`, then `WHY.md`, then the canonical plan in `docs/23-final-build-plan.md`. The current implementation checkpoint is recorded in `docs/44-build-checkpoint-01.md`.
 
 The prototypes, starter UI, diagrams, and visual specifications are non-authoritative vision artifacts. They are useful for atmosphere and hypotheses, but production should not copy their interface or let their feature set define scope.
 
@@ -56,18 +56,19 @@ It runs locally with no installation. Treat it as an idea sketch, not the build 
 
 ### 2. Run the starter app
 
-The current Next.js documentation requires Node.js 20.9 or newer.
+The starter is pinned to Node.js 22.13.0 and npm 10.8.2.
 
 ```bash
 cd starter
-npm install
+nvm use
+npm ci
 cp .env.example .env.local
 npm run dev
 ```
 
 Visit `http://localhost:3000`.
 
-The starter runs in mock mode without an API key. Its live route is an experiment and does not yet implement the verified research pipeline described in the canonical plan.
+The starter UI remains a non-binding mock. Live OpenAI/TMDB execution and production HTTP direction/closure routes are disabled until authenticated persistence, run telemetry, source security, resolver verification, and provenance are composed. API keys may be configured server-side now, but this checkpoint intentionally does not spend or transmit them.
 
 ### 3. Start Codex with GPT-5.6 Sol
 
