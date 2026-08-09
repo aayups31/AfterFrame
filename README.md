@@ -3,39 +3,48 @@
 > **Working codename:** AFTERFRAME  
 > **North star:** *The film ends. The world opens.*
 
-AFTERFRAME begins with the world's best Movie Investigator and is architected toward a domain-neutral investigation engine. V1 turns the curiosity left by a movie into an agent-created investigation. The user does not search for sources or receive a compressed AI answer. The agent assembles the strongest evidence, reveals it with deliberate pacing, provides exact routes back to originals, and lets the user read, think, question, annotate, and connect ideas until they have built a personal world behind the film.
+AFTERFRAME begins with the world's best Movie Investigator and is architected toward a domain-neutral investigation engine. V1 turns the curiosity left by a movie into an agent-created investigation. The user does not need to manage source discovery or receive a compressed AI answer. The agent assembles the strongest evidence, reveals it with deliberate pacing, provides the best verified routes back to originals, and lets the user supply leads, read, think, question, challenge, annotate, and connect ideas until they have built a personal world behind the film.
 
 ## Read this first
 
-Start with `START_HERE.md`, then `WHY.md`. These files lock the build order and the distinction between the reusable investigation engine and the movie-specialist layer.
+Start with `START_HERE.md`, then `WHY.md`, then the canonical plan in `docs/23-final-build-plan.md`. Together they lock the product truth, build order, V1 boundary, and distinction between the reusable investigation engine and the Movie Investigator.
 
-This kit contains:
+The prototypes, starter UI, diagrams, and visual specifications are non-authoritative vision artifacts. They are useful for atmosphere and hypotheses, but production should not copy their interface or let their feature set define scope.
+
+Black Hawk Down and other named films are evaluation fixtures, not the engine’s training set or supported catalog. Live V1 is designed to research any identifiable movie from scratch. Private user cases, notes, theories, and uploads are not training data without explicit informed opt-in.
+
+Core product and build material:
 
 - a product and interaction specification;
-- the visual and motion language;
-- the multi-agent research architecture;
+- the canonical product and build plan;
+- a staged, typed research and evidence pipeline;
 - direction-driven investigation branching rather than chat;
 - a specialized movie-research ontology and theory engine;
-- Close Investigation and a traceable visual-script creation studio;
-- a deferred but predesigned autonomous mission architecture;
-- exact-source locator and trust design;
-- the note, graph, flow, and cross-case system;
+- the exact-source locator, provenance, rights, and trust design;
+- the note and user-authorship system;
 - a database model and API contracts;
-- a finals-safe roadmap and a full build roadmap;
+- deterministic golden-case and evaluation plans;
 - Codex / GPT-5.6 Sol prompts;
 - a runnable standalone concept prototype;
 - a Next.js starter repository with a mocked vertical slice;
-- creator workflows for documentary, biopic, adaptation, and fact-check research;
 - investigation modes and calibration;
-- a post-core browser companion architecture;
 - validation, retention, pricing, and distribution experiments;
 - security, prompt-injection, privacy, accessibility, performance, cost, and observability plans;
 - testing and launch gates;
 - operating templates for cases, source audits, usability sessions, ADRs, and eval reports.
 
+Documented future concepts, not current V1 scope:
+
+- non-binding visual and motion explorations;
+- traceable creation-studio formats after explicit closure;
+- graph, flow, and automated cross-case systems;
+- additional creator workflows;
+- autonomous/background missions;
+- the browser companion architecture.
+
 ## Start in five minutes
 
-### 1. View the concept prototype
+### 1. View the non-binding concept prototype
 
 Open:
 
@@ -43,7 +52,7 @@ Open:
 prototype/afterframe-concept.html
 ```
 
-It runs locally with no installation.
+It runs locally with no installation. Treat it as an idea sketch, not the build target.
 
 ### 2. Run the starter app
 
@@ -58,7 +67,7 @@ npm run dev
 
 Visit `http://localhost:3000`.
 
-The starter runs in mock mode without an API key. Add `OPENAI_API_KEY` to enable the investigation route.
+The starter runs in mock mode without an API key. Its live route is an experiment and does not yet implement the verified research pipeline described in the canonical plan.
 
 ### 3. Start Codex with GPT-5.6 Sol
 
@@ -77,48 +86,41 @@ Then paste `prompts/codex/00-bootstrap.md`. Work phase-by-phase instead of askin
 
 ## Recommended first vertical slice
 
-Build **Black Hawk Down — “Why did everything go wrong?”** with:
+Build **Black Hawk Down — “Why did everything go wrong?”** as a product-and-trust proof with:
 
-1. one full cinematic home-to-case transition;
-2. 8–12 investigation beats;
-3. at least one book, one long-form video/interview, one archival or official document, and one article;
-4. exact source locators;
-5. a direction console that opens a theory branch in the main screen;
-6. highlight-to-note;
-7. one graph connection;
-8. one cross-reference to a previous beat;
-9. a simple user playlist;
-10. a Close Investigation review;
-11. a sourced visual-script preview;
-12. a finished case-world view.
+1. an exact film/version identity and correctable case intent;
+2. 20–40 audited sources with rights, access, and independence state;
+3. 8–12 paced beats backed by explicit claims, evidence, and honest locators;
+4. a real contradiction and a film-versus-history comparison;
+5. a user-authored theory direction that changes the main trail and receives adversarial research;
+6. an anchored note and a connection decision;
+7. branch return, pause, correction, and reopen behavior;
+8. a minimal case summary and versioned closure;
+9. deterministic fixtures plus domain, trust, privacy, cost, and latency evals.
 
-Do not start with auth, community features, a giant movie catalog, automated book ingestion, autonomous overnight research, or a general-purpose research engine.
+Presentation should be deliberately simple until observed behavior validates the loop. Do not start with prototype matching, playlists, graph editing, a creation studio, community features, a giant movie catalog, autonomous work, or a general-purpose research engine.
 
 ## V1 boundary
 
-Build the standalone Movie Investigator first. The general investigation engine is an internal architecture boundary, not a reason to support arbitrary topics in V1. The companion extension, additional specialists, and autonomous work remain documented but deferred.
+Build the standalone Movie Investigator first. The general investigation engine is an internal architecture boundary, not a reason to support non-movie topics in V1. Black Hawk Down proves product behavior and trust as a regression fixture; live V1 accepts any identifiable movie and researches it dynamically. Generalization is measured across a broad multi-film benchmark and unseen holdouts rather than a small supported catalog. A single documentary/video-essay creator pilot comes only after retention or its explicit entry gate. The companion extension, additional specialists, autonomous work, and full creation studio remain deferred.
 
 ## Read in this order
 
 1. `START_HERE.md`
-2. `WHY.md`
-3. `docs/00-north-star.md`
-4. `docs/26-engine-and-specialist-boundary.md`
-5. `docs/01-product-spec.md`
-6. `docs/02-experience-architecture.md`
-7. `docs/04-investigation-interface.md`
-8. `docs/17-direction-console-and-branching.md`
-9. `docs/18-movie-research-specialization.md`
-10. `docs/27-investigation-modes-and-calibration.md`
-11. `docs/05-agent-system.md`
-12. `docs/06-evidence-and-source-locators.md`
-13. `docs/28-creator-workflows.md`
-14. `docs/31-metrics-retention-and-instrumentation.md`
-15. `docs/33-security-privacy-and-threat-model.md`
-16. `docs/35-testing-and-quality-strategy.md`
-17. `docs/23-final-build-plan.md`
-18. `AGENTS.md`
-19. `prompts/codex/00-bootstrap.md`
+2. `AGENTS.md`
+3. `WHY.md`
+4. `docs/00-north-star.md`
+5. `docs/23-final-build-plan.md`
+6. `docs/26-engine-and-specialist-boundary.md`
+7. `docs/06-evidence-and-source-locators.md`
+8. `docs/18-movie-research-specialization.md`
+9. `docs/17-direction-console-and-branching.md`
+10. `docs/05-agent-system.md`
+11. `docs/31-metrics-retention-and-instrumentation.md`
+12. `docs/33-security-privacy-and-threat-model.md`
+13. `docs/35-testing-and-quality-strategy.md`
+14. Other focused documents as needed
+15. `prompts/codex/00-bootstrap.md` only when implementation begins
 
 ## External documentation used
 
