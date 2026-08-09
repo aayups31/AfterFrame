@@ -7,7 +7,7 @@ AFTERFRAME begins with the world's best Movie Investigator and is architected to
 
 ## Read this first
 
-Start with `START_HERE.md`, then `WHY.md`, then the canonical plan in `docs/23-final-build-plan.md`. The current implementation checkpoint is recorded in `docs/44-build-checkpoint-01.md`.
+Start with `START_HERE.md`, then `WHY.md`, then the canonical plan in `docs/23-final-build-plan.md`. The current implementation checkpoint is recorded in `docs/45-build-checkpoint-02.md`.
 
 The prototypes, starter UI, diagrams, and visual specifications are non-authoritative vision artifacts. They are useful for atmosphere and hypotheses, but production should not copy their interface or let their feature set define scope.
 
@@ -68,7 +68,7 @@ npm run dev
 
 Visit `http://localhost:3000`.
 
-The starter UI remains a non-binding mock. Live OpenAI/TMDB execution and production HTTP direction/closure routes are disabled until authenticated persistence, run telemetry, source security, resolver verification, and provenance are composed. API keys may be configured server-side now, but this checkpoint intentionally does not spend or transmit them.
+The starter UI remains a non-binding mock. Checkpoint 02 adds authenticated Postgres persistence, a server-only TMDB identity resolver, the durable research-job model, and a shadow-only OpenAI source-discovery adapter. Public production research routes remain disabled until migration deployment and a durable live worker can lease, checkpoint, retry, and persist each external run before it spends or publishes anything.
 
 ### 3. Start Codex with GPT-5.6 Sol
 

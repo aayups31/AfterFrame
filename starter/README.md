@@ -1,6 +1,6 @@
 # AFTERFRAME Movie Investigator Starter — V3
 
-This is a mocked vertical slice. Approve the experience before building the expensive research system.
+The visible starter is still a mocked, non-authoritative vertical slice. A parallel production foundation now lives under `src/core`, `src/application`, `src/contracts`, `src/infrastructure`, and the `af_*` Postgres schema.
 
 The starter preserves a domain-neutral investigation-core interface while implementing only the Movie Investigator specialist. It is not a generic research app.
 
@@ -15,7 +15,7 @@ npm run dev
 npm run check
 ```
 
-Node.js 20.9+ is required by the current Next.js documentation.
+This repository pins Node.js 22.13.x and npm 10.8.x.
 
 ## Routes
 
@@ -29,6 +29,8 @@ Node.js 20.9+ is required by the current Next.js documentation.
 
 The evidence links and locators in `src/lib/mock-case.ts` are clearly marked mock. They exist only to exercise the source-inspection UI. Do not present them as production evidence.
 
+The production research boundary does not return a generated answer. It stages identity, scoping, discovery, resolution, normalization, corroboration, and sequencing as separate jobs. OpenAI search output can create untrusted source candidates only; deterministic resolvers and later human/agent review must establish locators and evidence before anything can enter the investigation.
+
 ## Build with Codex
 
 From this directory:
@@ -39,9 +41,14 @@ codex -m gpt-5.6-sol
 
 Start with `../prompts/codex/00-bootstrap.md`.
 
-## Optional later dependencies
+## Production adapters
 
-Add `gsap` for authored scroll sequences, `@xyflow/react` for the world editor, and `@supabase/supabase-js` when those phases begin. They are intentionally excluded from the first vertical slice.
+- `src/infrastructure/auth` verifies a Supabase access token before any service-role persistence call.
+- `src/infrastructure/persistence` implements the investigation store through versioned, actor-scoped Postgres RPCs.
+- `src/specialists/movie/infrastructure` resolves any structurally valid TMDB movie reference without treating provider metadata as evidence.
+- `src/infrastructure/research` contains the shadow-only OpenAI web-source discovery adapter. It is not connected to a public route or durable worker yet.
+
+Future visual libraries such as `gsap` or `@xyflow/react` remain intentionally deferred; the prototype UI is not the production build target.
 
 ## V3 architecture additions
 
