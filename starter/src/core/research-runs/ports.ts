@@ -6,7 +6,26 @@ import type {
   ResearchRunBundle,
   ResearchRunRecord,
   ResearchScopePlanRecord,
+  ResearchStage,
+  ResearchStageExecutionResult,
 } from "@/core/research-runs/schemas";
+import type {
+  ClaimedResearchJob,
+  ResearchJobClaimResult,
+  ResearchJobCompletionResult,
+  ResearchJobFailureResult,
+  ResearchJobHeartbeatResult,
+  ResearchJobLeaseCursor,
+  ResearchJobCheckpointResult,
+  ResearchJobReleaseResult,
+  ResearchWorkerCheckpointProposal,
+  ResearchWorkerCheckpointRecord,
+  ResearchWorkerExecutionCompletion,
+  ResearchWorkerExecutionOutcome,
+  ResearchWorkerExecutionPlan,
+  ResearchWorkerExecutorIdentity,
+  ResearchWorkerFailureEnvelope,
+} from "@/core/research-runs/worker-schemas";
 
 export const START_RESEARCH_RUN_COMMAND = "start_research_run" as const;
 
@@ -109,4 +128,100 @@ export interface DeterministicResearchStageExecutor {
     plan: ResearchScopePlanRecord;
     attemptId: string;
   }>): Promise<unknown>;
+}
+
+export type ClaimResearchJobInput = Readonly<{
+  actorId: string;
+  runId: string;
+  jobId: string;
+  stage: ResearchStage;
+  expectedRunVersion: number;
+  expectedJobVersion: number;
+  idempotencyKey: string;
+  requestFingerprint: string;
+  attemptId: string;
+  workerId: string;
+  execution: ResearchWorkerExecutionPlan;
+  leaseDurationSeconds: number;
+}>;
+
+export type HeartbeatResearchJobInput = Readonly<{
+  actorId: string;
+  lease: ResearchJobLeaseCursor;
+  leaseDurationSeconds: number;
+  occurredAt: string;
+}>;
+
+export type CheckpointResearchJobInput = Readonly<{
+  actorId: string;
+  lease: ResearchJobLeaseCursor;
+  checkpoint: ResearchWorkerCheckpointRecord;
+  leaseDurationSeconds: number;
+}>;
+
+export type CompleteDurableResearchJobInput = Readonly<{
+  actorId: string;
+  lease: ResearchJobLeaseCursor;
+  idempotencyKey: string;
+  result: ResearchStageExecutionResult;
+  outputFingerprint: string;
+  execution: ResearchWorkerExecutionCompletion;
+}>;
+
+export type FailDurableResearchJobInput = Readonly<{
+  actorId: string;
+  lease: ResearchJobLeaseCursor;
+  idempotencyKey: string;
+  failure: ResearchWorkerFailureEnvelope;
+  execution: ResearchWorkerExecutionCompletion;
+}>;
+
+export type ReleaseResearchJobInput = FailDurableResearchJobInput;
+
+/**
+ * Every mutating method is implemented as a single token-fenced transaction.
+ * In particular, claimResearchJob must persist the RUNNING attempt before it
+ * returns CLAIMED; adapters must never emulate these operations with reads
+ * followed by independent writes. An expired lease on a RUNNING attempt is
+ * resumed with the same attempt, external idempotency key, and latest durable
+ * checkpoint. A new attempt is legal only after the previous attempt has a
+ * durably committed failure/release outcome.
+ */
+export interface DurableResearchWorkerStore {
+  claimResearchJob(input: ClaimResearchJobInput): Promise<ResearchJobClaimResult>;
+  heartbeatResearchJob(
+    input: HeartbeatResearchJobInput,
+  ): Promise<ResearchJobHeartbeatResult>;
+  checkpointResearchJob(
+    input: CheckpointResearchJobInput,
+  ): Promise<ResearchJobCheckpointResult>;
+  completeResearchJob(
+    input: CompleteDurableResearchJobInput,
+  ): Promise<ResearchJobCompletionResult>;
+  failResearchJob(
+    input: FailDurableResearchJobInput,
+  ): Promise<ResearchJobFailureResult>;
+  releaseResearchJob(
+    input: ReleaseResearchJobInput,
+  ): Promise<ResearchJobReleaseResult>;
+}
+
+export type DurableResearchStageExecutionInput = Readonly<{
+  claim: ClaimedResearchJob;
+  /** Must be forwarded to providers that support request idempotency. */
+  externalIdempotencyKey: string;
+  signal: AbortSignal;
+  checkpoint: (
+    checkpoint: ResearchWorkerCheckpointProposal,
+  ) => Promise<ResearchWorkerCheckpointRecord>;
+}>;
+
+/** External adapters sit behind this port; the application worker calls no provider directly. */
+export interface DurableResearchStageExecutor {
+  readonly identity: ResearchWorkerExecutorIdentity;
+  execute(input: DurableResearchStageExecutionInput): Promise<ResearchWorkerExecutionOutcome>;
+}
+
+export interface DurableResearchStageExecutorRegistry {
+  resolve(stage: ResearchStage): DurableResearchStageExecutor | null;
 }

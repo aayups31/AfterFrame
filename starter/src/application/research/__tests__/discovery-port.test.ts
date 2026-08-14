@@ -79,6 +79,7 @@ describe("research discovery boundary", () => {
           schemaFingerprint: "b".repeat(64),
         },
         tool: { id: "web-search", version: "1" },
+        telemetryState: "COMPLETE",
         usage: {
           inputTokens: 10,
           outputTokens: 20,
@@ -136,6 +137,17 @@ describe("research discovery boundary", () => {
       ResearchDiscoveryOutputSchema.safeParse({
         ...output,
         sourceBody: "hostile private source text",
+      }).success,
+    ).toBe(false);
+    expect(
+      ResearchDiscoveryOutputSchema.safeParse({
+        ...output,
+        execution: {
+          ...output.execution,
+          telemetryState: "PARTIAL",
+          usage: null,
+          cost: null,
+        },
       }).success,
     ).toBe(false);
   });

@@ -132,6 +132,13 @@ export const ResearchDiscoveryOutputSchema = z
         message: "Completed discovery output requires latency metadata",
       });
     }
+    if (output.execution.telemetryState !== "COMPLETE") {
+      context.addIssue({
+        code: "custom",
+        path: ["execution", "telemetryState"],
+        message: "Completed discovery output requires complete telemetry",
+      });
+    }
   });
 
 /**

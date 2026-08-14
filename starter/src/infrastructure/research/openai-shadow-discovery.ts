@@ -382,6 +382,7 @@ export class OpenAIShadowResearchDiscoveryAdapter
         ),
       },
       tool: { id: TOOL_ID, version: TOOL_VERSION },
+      telemetryState: "COMPLETE",
       usage: {
         inputTokens: response.data.usage.input_tokens,
         outputTokens: response.data.usage.output_tokens,

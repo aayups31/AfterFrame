@@ -8,17 +8,22 @@ import {
 import {
   EntityIdSchema,
   IsoDateTimeSchema,
-  OpaqueReferenceSchema,
   SlugSchema,
   VersionTagSchema,
 } from "@/core/shared/schemas";
+
+export const ResearchIdempotencyKeySchema = z
+  .string()
+  .min(8)
+  .max(200)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 
 export const StartResearchRunCommandSchema = z
   .object({
     caseId: EntityIdSchema,
     branchId: EntityIdSchema.nullable(),
     expectedCaseVersion: z.number().int().nonnegative(),
-    idempotencyKey: OpaqueReferenceSchema,
+    idempotencyKey: ResearchIdempotencyKeySchema,
   })
   .strict();
 
@@ -28,7 +33,7 @@ export const ExecuteResearchJobCommandSchema = z
     jobId: EntityIdSchema,
     expectedRunVersion: z.number().int().nonnegative(),
     expectedJobVersion: z.number().int().nonnegative(),
-    idempotencyKey: OpaqueReferenceSchema,
+    idempotencyKey: ResearchIdempotencyKeySchema,
   })
   .strict();
 
@@ -38,7 +43,7 @@ export const RetryResearchJobCommandSchema = z
     jobId: EntityIdSchema,
     expectedRunVersion: z.number().int().nonnegative(),
     expectedJobVersion: z.number().int().nonnegative(),
-    idempotencyKey: OpaqueReferenceSchema,
+    idempotencyKey: ResearchIdempotencyKeySchema,
   })
   .strict();
 

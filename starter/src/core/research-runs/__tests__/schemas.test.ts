@@ -37,18 +37,9 @@ function runningAttempt() {
         schemaFingerprint: "d".repeat(64),
       },
       tool: null,
-      usage: {
-        inputTokens: 0,
-        outputTokens: 0,
-        toolCalls: 0,
-        inputBytes: 0,
-        outputBytes: 0,
-      },
-      cost: {
-        currency: "USD",
-        pricingState: "PRICED",
-        amountMicros: 0,
-      },
+      telemetryState: "UNAVAILABLE",
+      usage: null,
+      cost: null,
       latencyMs: null,
       provenanceInputs: [
         { recordType: "RUN", recordId: BLACK_HAWK_DOWN_RESEARCH_IDS.run },
@@ -189,6 +180,7 @@ describe("research-run durable schemas", () => {
           templateFingerprint: "a".repeat(64),
         },
         tool: { id: "web-search", version: "1" },
+        telemetryState: "COMPLETE",
         usage: {
           inputTokens: 10,
           outputTokens: 5,
@@ -235,6 +227,68 @@ describe("research-run durable schemas", () => {
         execution: {
           ...live.execution,
           privateNoteBody: "must never enter telemetry",
+        },
+      }).success,
+    ).toBe(false);
+
+    const unavailableFailure = {
+      ...attempt,
+      status: "FAILED_TERMINAL",
+      execution: {
+        ...attempt.execution,
+        latencyMs: 123,
+      },
+      errorCode: "provider-telemetry-unavailable",
+      aggregateVersion: 1,
+      completedAt: LATER,
+    } as const;
+    expect(
+      ResearchAttemptRecordSchema.safeParse(unavailableFailure).success,
+    ).toBe(true);
+    expect(
+      ResearchAttemptRecordSchema.safeParse({
+        ...attempt,
+        status: "SUCCEEDED",
+        execution: {
+          ...attempt.execution,
+          latencyMs: 123,
+        },
+        outputFingerprint: "b".repeat(64),
+        aggregateVersion: 1,
+        completedAt: LATER,
+      }).success,
+    ).toBe(true);
+    expect(
+      ResearchAttemptRecordSchema.safeParse({
+        ...unavailableFailure,
+        execution: {
+          ...unavailableFailure.execution,
+          usage: {
+            inputTokens: 0,
+            outputTokens: 0,
+            toolCalls: 0,
+            inputBytes: 0,
+            outputBytes: 0,
+          },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      ResearchAttemptRecordSchema.safeParse({
+        ...unavailableFailure,
+        execution: {
+          ...unavailableFailure.execution,
+          telemetryState: "PARTIAL",
+          providerRunId: "known-provider-run",
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      ResearchAttemptRecordSchema.safeParse({
+        ...unavailableFailure,
+        execution: {
+          ...unavailableFailure.execution,
+          telemetryState: "PARTIAL",
         },
       }).success,
     ).toBe(false);

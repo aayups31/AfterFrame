@@ -5,6 +5,9 @@ import {
   ResearchRunBundleSchema,
   ResearchRunRecordSchema,
   researchStageIndex,
+  type ExecutionCostMetadata,
+  type ExecutionTelemetryState,
+  type ExecutionUsageMetadata,
   type ResearchAttemptRecord,
   type ResearchAttemptStatus,
   type ResearchJobRecord,
@@ -437,6 +440,10 @@ export type CompleteResearchAttemptInput = Readonly<{
   targetStatus: Exclude<ResearchAttemptStatus, "RUNNING">;
   outputFingerprint: string | null;
   errorCode: string | null;
+  telemetryState: ExecutionTelemetryState;
+  providerRunId: string | null;
+  usage: ExecutionUsageMetadata | null;
+  cost: ExecutionCostMetadata | null;
   latencyMs: number;
   expectedVersion: number;
   occurredAt: string;
@@ -481,6 +488,10 @@ export function completeResearchAttempt(
     status: input.targetStatus,
     execution: {
       ...parsedCurrent.execution,
+      telemetryState: input.telemetryState,
+      providerRunId: input.providerRunId,
+      usage: input.usage,
+      cost: input.cost,
       latencyMs: input.latencyMs,
     },
     outputFingerprint,

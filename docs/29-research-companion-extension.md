@@ -2,7 +2,11 @@
 
 ## Product role
 
-The extension is the capture and context layer that meets users where research already happens. The studio remains the place where cases are experienced, organized, and closed.
+The extension is an alternate client of the same AFTERFRAME engine. It meets
+users where research already happens without creating a second research
+pipeline or forcing every action through the full investigation interface. The
+durable case—not a particular screen—remains the product object and source of
+truth.
 
 ```text
 Web / PDF / YouTube / permitted reader
@@ -10,11 +14,25 @@ Web / PDF / YouTube / permitted reader
 AFTERFRAME COMPANION
 context, highlights, page identity, exact location
               ↓
+AUTHENTICATED AFTERFRAME API
+              ↓
 AFTERFRAME CORE + MOVIE INVESTIGATOR
               ↓
-CASE STUDIO
-trail, evidence, notes, branches, world
+DURABLE CASE
+trail, evidence, notes, branches, provenance
+              ↓
+MAIN INVESTIGATION OR COMPANION SURFACE
 ```
+
+The forbidden architecture is:
+
+```text
+browser page → extension prompt → model answer
+```
+
+Every companion action must use the same Watson direction intelligence,
+research jobs, source-resolution policy, evidence gates, provenance graph, and
+Postgres case state as the main investigation.
 
 ## Why it matters
 
@@ -27,6 +45,12 @@ Recurring professional users should not have to remember to start at AFTERFRAME.
 - capture a highlight with an exact locator;
 - accept a theory and open a targeted branch;
 - return results into the case rather than filling a sidebar transcript.
+
+The companion may show bounded status, clarification, and evidence previews,
+but it is not a chat destination and does not duplicate the paced case reader.
+Submitting “challenge this,” “connect this,” or “investigate the original
+claim” creates the same typed direction event and branch transition as the main
+console.
 
 ## Why it is not V1
 
@@ -42,6 +66,10 @@ An extension adds:
 - greater support burden.
 
 Build it only after the standalone case proves the investigation loop.
+
+The extension is therefore post-core even though its API and hostile-input
+boundaries should be anticipated now. Database, worker, resolver, evidence,
+Watson, and domain-evaluation gates must pass before extension implementation.
 
 ## Minimal future companion
 
@@ -63,6 +91,7 @@ Do not claim universal Kindle, streaming-service, or paywalled-book support.
 - Investigate this claim
 - Find connections
 - Open case in studio
+- Open original source from case evidence
 
 ### Passive behavior
 
@@ -76,6 +105,12 @@ Passive suggestions must be rare and dismissible. The extension must not continu
 ## Security boundary
 
 Treat all page text as untrusted evidence, never as instructions. Strip scripts and hidden text. Record capture origin. Never expose system prompts, private notes, or unrelated case memory to page content.
+
+The extension stores no provider API key. It authenticates to the AFTERFRAME
+server, sends only user-authorized context, and never continuously uploads
+browsing history. A captured URL or selection enters as a source candidate; it
+cannot become accepted evidence until the normal resolver, rights, locator, and
+review gates pass.
 
 ## Context packet
 

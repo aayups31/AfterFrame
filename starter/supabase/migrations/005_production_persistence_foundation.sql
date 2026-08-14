@@ -1211,7 +1211,7 @@ create table public.af_research_jobs (
   constraint af_research_jobs_dependency_fk foreign key (run_id, depends_on_job_id)
     references public.af_research_jobs(run_id, id)
     deferrable initially deferred,
-  constraint af_research_jobs_stage_ordinal_check check (
+  constraint af_research_jobs_stage_matches_ordinal_check check (
     stage_ordinal = case stage
       when 'IDENTITY' then 0
       when 'SCOPING' then 1

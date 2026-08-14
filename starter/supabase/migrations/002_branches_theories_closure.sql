@@ -140,7 +140,7 @@ create table if not exists research_missions (
   case_id uuid not null references cases(id) on delete cascade,
   objective text not null,
   status text not null default 'draft',
-  authorization jsonb not null default '{}'::jsonb,
+  "authorization" jsonb not null default '{}'::jsonb,
   budget jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   started_at timestamptz,

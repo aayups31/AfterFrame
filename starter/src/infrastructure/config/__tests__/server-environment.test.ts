@@ -10,6 +10,8 @@ const environment = {
   NEXT_PUBLIC_SUPABASE_URL: "https://project.supabase.co",
   NEXT_PUBLIC_SUPABASE_ANON_KEY: "public-anon-key",
   SUPABASE_SERVICE_ROLE_KEY: "service-role-secret",
+  SUPABASE_DB_URL:
+    "postgresql://postgres.project:database-secret@session.pooler.supabase.com:5432/postgres",
 };
 
 describe("server environment", () => {
@@ -33,6 +35,7 @@ describe("server environment", () => {
       openAIConfigured: true,
       tmdbConfigured: true,
       supabaseConfigured: true,
+      databaseConfigured: true,
     });
   });
 
@@ -45,6 +48,7 @@ describe("server environment", () => {
     expect(serialized).not.toContain("openai-secret");
     expect(serialized).not.toContain("tmdb-secret");
     expect(serialized).not.toContain("service-role-secret");
+    expect(serialized).not.toContain("database-secret");
   });
 
   it("fails closed when any required server credential is absent", () => {
@@ -54,5 +58,15 @@ describe("server environment", () => {
     delete missingServiceRole.SUPABASE_SERVICE_ROLE_KEY;
 
     expect(() => readAfterFrameServerEnvironment(missingServiceRole)).toThrow();
+  });
+
+  it("rejects database URL templates before a migration tool can use them", () => {
+    expect(() =>
+      readAfterFrameServerEnvironment({
+        ...environment,
+        SUPABASE_DB_URL:
+          "postgresql://postgres:[YOUR-PASSWORD]@db.project.supabase.co:5432/postgres",
+      }),
+    ).toThrow();
   });
 });

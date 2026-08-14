@@ -404,6 +404,12 @@ export const ExecutionKindSchema = z.enum([
   "IMPORTER",
 ]);
 
+export const ExecutionTelemetryStateSchema = z.enum([
+  "COMPLETE",
+  "PARTIAL",
+  "UNAVAILABLE",
+]);
+
 export const ExecutionMetadataSchema = z
   .object({
     executionKind: ExecutionKindSchema,
@@ -413,8 +419,9 @@ export const ExecutionMetadataSchema = z
     prompt: ExecutionPromptMetadataSchema.nullable(),
     schema: ExecutionSchemaMetadataSchema,
     tool: ExecutionToolMetadataSchema.nullable(),
-    usage: ExecutionUsageMetadataSchema,
-    cost: ExecutionCostMetadataSchema,
+    telemetryState: ExecutionTelemetryStateSchema,
+    usage: ExecutionUsageMetadataSchema.nullable(),
+    cost: ExecutionCostMetadataSchema.nullable(),
     latencyMs: z.number().int().nonnegative().nullable(),
     provenanceInputs: z
       .array(ExecutionProvenanceReferenceSchema)
@@ -455,6 +462,38 @@ export const ExecutionMetadataSchema = z
           : `${execution.executionKind} execution cannot claim tool metadata`,
       });
     }
+    if (
+      execution.telemetryState === "COMPLETE" &&
+      (execution.usage === null || execution.cost === null)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["telemetryState"],
+        message: "COMPLETE execution telemetry requires usage and cost",
+      });
+    }
+    if (
+      execution.telemetryState === "UNAVAILABLE" &&
+      (execution.usage !== null || execution.cost !== null)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["telemetryState"],
+        message: "UNAVAILABLE execution telemetry cannot invent usage or cost",
+      });
+    }
+    if (
+      execution.telemetryState === "PARTIAL" &&
+      execution.providerRunId === null &&
+      execution.usage === null &&
+      execution.cost === null
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["telemetryState"],
+        message: "PARTIAL execution telemetry requires one known provider field",
+      });
+    }
   });
 
 /**
@@ -484,6 +523,10 @@ export const ResearchAttemptRecordSchema = z
       if (
         attempt.completedAt !== null ||
         attempt.execution.latencyMs !== null ||
+        attempt.execution.telemetryState !== "UNAVAILABLE" ||
+        attempt.execution.providerRunId !== null ||
+        attempt.execution.usage !== null ||
+        attempt.execution.cost !== null ||
         attempt.outputFingerprint !== null ||
         attempt.errorCode !== null
       ) {
@@ -987,6 +1030,15 @@ export type ResearchRunHealth = z.infer<typeof ResearchRunHealthSchema>;
 export type ResearchJobStatus = z.infer<typeof ResearchJobStatusSchema>;
 export type ResearchAttemptStatus = z.infer<
   typeof ResearchAttemptStatusSchema
+>;
+export type ExecutionTelemetryState = z.infer<
+  typeof ExecutionTelemetryStateSchema
+>;
+export type ExecutionUsageMetadata = z.infer<
+  typeof ExecutionUsageMetadataSchema
+>;
+export type ExecutionCostMetadata = z.infer<
+  typeof ExecutionCostMetadataSchema
 >;
 export type ResearchScopePlanRecord = z.infer<
   typeof ResearchScopePlanRecordSchema

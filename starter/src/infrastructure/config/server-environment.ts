@@ -1,6 +1,37 @@
 import { z } from "zod";
 
 const NonEmptySecretSchema = z.string().min(1);
+const PostgresConnectionStringSchema = z
+  .string()
+  .min(1)
+  .superRefine((value, context) => {
+    try {
+      const parsed = new URL(value);
+      if (
+        !["postgres:", "postgresql:"].includes(parsed.protocol) ||
+        parsed.username.length === 0 ||
+        parsed.password.length === 0 ||
+        parsed.hostname.length === 0 ||
+        parsed.pathname.length <= 1
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "SUPABASE_DB_URL must be a credentialed PostgreSQL URL",
+        });
+      }
+      if (/\[|\]|your[-_ ]?password|replace|example/i.test(value)) {
+        context.addIssue({
+          code: "custom",
+          message: "SUPABASE_DB_URL cannot contain a placeholder",
+        });
+      }
+    } catch {
+      context.addIssue({
+        code: "custom",
+        message: "SUPABASE_DB_URL must be a valid URL",
+      });
+    }
+  });
 
 export const AfterFrameServerEnvironmentSchema = z
   .object({
@@ -9,6 +40,7 @@ export const AfterFrameServerEnvironmentSchema = z
     NEXT_PUBLIC_SUPABASE_URL: z.string().url(),
     NEXT_PUBLIC_SUPABASE_ANON_KEY: NonEmptySecretSchema,
     SUPABASE_SERVICE_ROLE_KEY: NonEmptySecretSchema,
+    SUPABASE_DB_URL: PostgresConnectionStringSchema,
     AFTERFRAME_RESEARCH_MODE: z
       .enum(["fixture", "shadow"])
       .default("fixture"),
@@ -26,6 +58,7 @@ const SERVER_ENV_KEYS = [
   "NEXT_PUBLIC_SUPABASE_URL",
   "NEXT_PUBLIC_SUPABASE_ANON_KEY",
   "SUPABASE_SERVICE_ROLE_KEY",
+  "SUPABASE_DB_URL",
   "AFTERFRAME_RESEARCH_MODE",
   "OPENAI_RESEARCH_MODEL",
 ] as const;
@@ -55,5 +88,6 @@ export function serverEnvironmentReadiness(
       environment.NEXT_PUBLIC_SUPABASE_URL.length > 0 &&
       environment.NEXT_PUBLIC_SUPABASE_ANON_KEY.length > 0 &&
       environment.SUPABASE_SERVICE_ROLE_KEY.length > 0,
+    databaseConfigured: environment.SUPABASE_DB_URL.length > 0,
   } as const;
 }

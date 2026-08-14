@@ -23,6 +23,50 @@ The acknowledgement is atmospheric feedback, not the deliverable. Good examples:
 
 Never say “you are definitely right” before evidence exists.
 
+## Watson intelligence boundary
+
+The direction console has its own specialized investigative intelligence. Its
+role is analogous to Watson beside Sherlock: understand the user's developing
+thought, inspect the current case, and identify the most useful way to change
+the investigation. It is not a second factual universe and it is not a general
+chatbot.
+
+Watson reads the canonical case graph:
+
+- the exact user direction and its anchor;
+- the active branch and return position;
+- current claims, evidence, limitations, and contradictions;
+- unresolved questions and source-coverage gaps;
+- user notes and explicitly user-authored theories;
+- available research actions, expected information gain, cost, and latency.
+
+It may propose only a typed investigative move:
+
+```text
+OPEN_BRANCH | DEEPEN | CHALLENGE_CLAIM | TEST_THEORY
+COMPARE | CONNECT | SEARCH_COUNTEREVIDENCE
+CLARIFY_DIRECTION | CHANGE_STYLE | RETURN | CLOSE
+```
+
+Its reasoning loop is:
+
+```text
+read canonical case state
+  → interpret the user's intended move
+  → inspect relevant evidence and gaps
+  → rank bounded investigative actions
+  → clarify only when materially ambiguous
+  → emit one validated direction proposal
+  → let the research engine execute it
+  → update the main investigation through durable branch state
+```
+
+Watson may briefly explain what it is changing and why. It must not answer the
+research question in the panel, invent evidence, silently turn a suggestion
+into the user's conclusion, or retain a private case history that can diverge
+from the canonical investigation graph. Direction text, normalized intent,
+branch output, and acknowledgements remain separate records.
+
 ## Direction types
 
 The router classifies every submission into one primary action:
