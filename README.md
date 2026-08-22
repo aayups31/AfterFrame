@@ -7,7 +7,7 @@ AFTERFRAME begins with the world's best Movie Investigator and is architected to
 
 ## Read this first
 
-Start with `START_HERE.md`, then `WHY.md`, then the canonical plan in `docs/23-final-build-plan.md`. The current implementation checkpoint is recorded in `docs/46-build-checkpoint-03.md`.
+Start with `START_HERE.md`, then `WHY.md`, then the canonical plan in `docs/23-final-build-plan.md`. The current implementation checkpoint is recorded in `docs/47-build-checkpoint-04a.md`.
 
 The prototypes, starter UI, diagrams, and visual specifications are non-authoritative vision artifacts. They are useful for atmosphere and hypotheses, but production should not copy their interface or let their feature set define scope.
 
@@ -68,7 +68,7 @@ npm run dev
 
 Visit `http://localhost:3000`.
 
-The starter UI remains a non-binding mock. Checkpoint 03 deploys authenticated Postgres persistence and proves the durable worker lifecycle against the real database: claim, checkpoint, same-attempt handoff, recovery, completion, replay, and exact rollback. The server-only TMDB resolver and candidate-only OpenAI background adapter exist behind interfaces, but public production research routes remain disabled until concrete stage executors, causal input manifests, resolver verification, evidence/claim persistence, provenance, and domain eval gates pass.
+The starter UI remains a non-binding mock. Checkpoint 03 deployed authenticated Postgres persistence and proved the durable worker lifecycle. Checkpoint 04A now implements the first concrete durable `IDENTITY` executor, resolver-verified public movie identity, and Postgres-authored causal manifests; migration 008 is locally verified but awaits the corrected same-project Supabase connection before deployment. The public production research route remains disabled until discovery, source/locator resolution, evidence and claim persistence, corroboration, sequencing, provenance, and domain eval gates pass.
 
 ### 3. Start Codex with GPT-5.6 Sol
 

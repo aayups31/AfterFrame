@@ -5,6 +5,7 @@ import type {
   DeterministicResearchStageExecutor,
   ResearchRunFingerprintPort,
 } from "@/core/research-runs/ports";
+import { ResearchRunBundleSchema } from "@/core/research-runs/schemas";
 import {
   BLACK_HAWK_DOWN_RESEARCH_BUNDLE,
   blackHawkDownStageResult,
@@ -84,7 +85,7 @@ describe("deterministic research job execution", () => {
 
     expect(executionCount).toBe(7);
     expect(bundle.jobs.map(({ status }) => status)).toEqual([
-      "SUCCEEDED",
+      "DEGRADED",
       "SUCCEEDED",
       "SUCCEEDED",
       "DEGRADED",
@@ -95,6 +96,8 @@ describe("deterministic research job execution", () => {
     expect(bundle.run.status).toBe("DEGRADED");
     expect(bundle.run.currentStage).toBe("SEQUENCING");
     expect(bundle.sourceCandidates).toHaveLength(1);
+    expect(bundle.subjectIdentities).toHaveLength(1);
+    expect(bundle.subjectIdentities[0]?.evidenceStatus).toBe("NOT_EVIDENCE");
     expect(bundle.sourceCandidates[0]?.evidenceStatus).toBe("NOT_EVIDENCE");
     expect(bundle.outputs.every((output) => output.reviewState === "PROPOSED"))
       .toBe(true);
@@ -103,6 +106,14 @@ describe("deterministic research job execution", () => {
         (output) => output.publicationAuthority === "NONE",
       ),
     ).toBe(true);
+    const identityOutput = bundle.outputs[0];
+    if (identityOutput === undefined) throw new Error("Missing IDENTITY output");
+    expect(
+      ResearchRunBundleSchema.safeParse({
+        ...bundle,
+        outputs: [...bundle.outputs, identityOutput],
+      }).success,
+    ).toBe(false);
   });
 
   it("replays a completed attempt before evaluating stale versions", async () => {

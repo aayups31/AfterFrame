@@ -151,7 +151,7 @@ export class SupabaseDurableResearchWorkerStore
   async claimResearchJob(input: ClaimResearchJobInput) {
     this.#assertActor(input.actorId);
     const command = parseCommand(ClaimResearchJobLeaseCommandSchema, input);
-    const data = await this.#rpc("af_claim_research_job_v1", {
+    const data = await this.#rpc("af_claim_research_job_v2", {
       p_actor_id: this.#actorId,
       p_run_id: command.runId,
       p_job_id: command.jobId,
@@ -159,7 +159,6 @@ export class SupabaseDurableResearchWorkerStore
       p_expected_run_version: command.expectedRunVersion,
       p_expected_job_version: command.expectedJobVersion,
       p_idempotency_key: command.idempotencyKey,
-      p_request_fingerprint: command.requestFingerprint,
       p_attempt_id: command.attemptId,
       p_worker_id: command.workerId,
       p_execution: command.execution,
@@ -201,7 +200,7 @@ export class SupabaseDurableResearchWorkerStore
   async completeResearchJob(input: CompleteDurableResearchJobInput) {
     this.#assertActor(input.actorId);
     const command = parseCommand(CompleteResearchJobLeaseCommandSchema, input);
-    const data = await this.#rpc("af_complete_research_job_v1", {
+    const data = await this.#rpc("af_complete_research_job_v2", {
       p_actor_id: this.#actorId,
       p_lease: command.lease,
       p_idempotency_key: command.idempotencyKey,

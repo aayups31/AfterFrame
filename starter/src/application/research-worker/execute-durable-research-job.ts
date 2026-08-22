@@ -181,7 +181,6 @@ function assertClaimMatches(
     jobId: string;
     stage: string;
     workerId: string;
-    requestFingerprint: string;
     execution: ResearchWorkerExecutionPlan;
   }>,
 ) {
@@ -190,7 +189,6 @@ function assertClaimMatches(
     claim.job.id !== input.jobId ||
     claim.job.stage !== input.stage ||
     claim.lease.workerId !== input.workerId ||
-    claim.attempt.requestFingerprint !== input.requestFingerprint ||
     JSON.stringify(claim.execution) !== JSON.stringify(input.execution)
   ) {
     throw new DurableResearchWorkerError(
@@ -287,6 +285,31 @@ function assertStageResultMatches(
       "STAGE_OUTPUT_MISMATCH",
       "The executor result does not belong to the active run, job, attempt, and stage",
     );
+  }
+  if (result.output.stage === "IDENTITY") {
+    const identity = result.subjectIdentities[0];
+    const expectedRequirementIds = new Set(
+      claim.plan.plan.identityRequirements.map(({ id }) => id),
+    );
+    const reportedRequirementIds = new Set([
+      ...result.output.resolvedRequirementIds,
+      ...result.output.unresolvedRequirementIds,
+    ]);
+    if (
+      identity === undefined ||
+      identity.caseId !== claim.run.caseId ||
+      identity.subjectRefFingerprint !==
+        claim.inputManifest.manifest.subjectRefFingerprint ||
+      reportedRequirementIds.size !== expectedRequirementIds.size ||
+      [...reportedRequirementIds].some(
+        (requirementId) => !expectedRequirementIds.has(requirementId),
+      )
+    ) {
+      throw new DurableResearchWorkerError(
+        "STAGE_OUTPUT_MISMATCH",
+        "The resolved identity does not match the claimed case, subject, and specialist requirements",
+      );
+    }
   }
 
   const permittedSourceClasses = new Set(claim.plan.plan.sourceClassIds);
@@ -469,13 +492,6 @@ export function createDurableResearchWorkerService(
       );
     }
 
-    const requestFingerprint = Sha256Schema.parse(
-      dependencies.fingerprints.fingerprintAttemptRequest(
-        command.runId,
-        command.jobId,
-        command.idempotencyKey,
-      ),
-    );
     const attemptId = EntityIdSchema.parse(
       dependencies.createId("research_attempt"),
     );
@@ -492,7 +508,6 @@ export function createDurableResearchWorkerService(
           expectedRunVersion: command.expectedRunVersion,
           expectedJobVersion: command.expectedJobVersion,
           idempotencyKey: command.idempotencyKey,
-          requestFingerprint,
           attemptId,
           workerId: configuration.workerId,
           execution: executorIdentity.execution,
@@ -555,7 +570,6 @@ export function createDurableResearchWorkerService(
         jobId: command.jobId,
         stage: command.stage,
         workerId: configuration.workerId,
-        requestFingerprint,
         execution: executorIdentity.execution,
       });
     } catch (error) {
@@ -832,6 +846,7 @@ export function createDurableResearchWorkerService(
     const execution = Promise.resolve()
       .then(() =>
         executor.execute({
+          actorId,
           claim,
           externalIdempotencyKey: lease.externalIdempotencyKey,
           signal: workAbort.signal,

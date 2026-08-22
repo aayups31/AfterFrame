@@ -38,6 +38,7 @@ export const BLACK_HAWK_DOWN_RESEARCH_IDS = {
     CORROBORATION: "20000000-0000-4000-8000-000000000025",
     SEQUENCING: "20000000-0000-4000-8000-000000000026",
   },
+  subjectIdentity: "20000000-0000-4000-8000-000000000027",
   candidate: "20000000-0000-4000-8000-000000000030",
   sequenceProposal: "20000000-0000-4000-8000-000000000031",
 } as const;
@@ -157,6 +158,7 @@ export const BLACK_HAWK_DOWN_RESEARCH_BUNDLE = ResearchRunBundleSchema.parse({
   })),
   attempts: [],
   outputs: [],
+  subjectIdentities: [],
   sourceCandidates: [],
   untrustedContent: [],
 });
@@ -231,15 +233,39 @@ export function blackHawkDownStageResult(
   switch (stage) {
     case "IDENTITY":
       return ResearchStageExecutionResultSchema.parse({
-        outcome: "SUCCEEDED",
-        boundedReasonCodes: [],
+        outcome: "DEGRADED",
+        boundedReasonCodes: ["identity-requirements-unresolved"],
         output: {
           ...base,
           kind: "IDENTITY_RESULT",
           stage,
+          subjectIdentityId: BLACK_HAWK_DOWN_RESEARCH_IDS.subjectIdentity,
           resolvedRequirementIds: ["tmdb-film"],
           unresolvedRequirementIds: ["film-version"],
         },
+        subjectIdentities: [
+          {
+            schemaVersion: 1,
+            id: BLACK_HAWK_DOWN_RESEARCH_IDS.subjectIdentity,
+            caseId: BLACK_HAWK_DOWN_CASE.id,
+            runId: BLACK_HAWK_DOWN_RESEARCH_IDS.run,
+            jobId: BLACK_HAWK_DOWN_RESEARCH_IDS.jobs.IDENTITY,
+            attemptId,
+            subjectRefFingerprint: HASHES.identity,
+            publicIdentity: BLACK_HAWK_DOWN_PUBLIC_SUBJECT_IDENTITY,
+            evidenceStatus: "NOT_EVIDENCE",
+            reviewState: "PROPOSED",
+            publicationAuthority: "NONE",
+            provenanceInputs: [
+              {
+                recordType: "JOB",
+                recordId: BLACK_HAWK_DOWN_RESEARCH_IDS.jobs.IDENTITY,
+              },
+              { recordType: "ATTEMPT", recordId: attemptId },
+            ],
+            createdAt,
+          },
+        ],
         sourceCandidates: [],
         untrustedContent: [],
       });
@@ -255,6 +281,7 @@ export function blackHawkDownStageResult(
           sourceClassIds: fixturePlan.sourceClassIds,
           coverageGapCodes: ["film-version-unresolved"],
         },
+        subjectIdentities: [],
         sourceCandidates: [],
         untrustedContent: [],
       });
@@ -268,6 +295,7 @@ export function blackHawkDownStageResult(
           stage,
           candidateIds: [BLACK_HAWK_DOWN_RESEARCH_IDS.candidate],
         },
+        subjectIdentities: [],
         sourceCandidates: [
           {
             schemaVersion: 1,
@@ -304,6 +332,7 @@ export function blackHawkDownStageResult(
           locatorIds: [],
           unresolvedCandidateIds: [BLACK_HAWK_DOWN_RESEARCH_IDS.candidate],
         },
+        subjectIdentities: [],
         sourceCandidates: [],
         untrustedContent: [],
       });
@@ -318,6 +347,7 @@ export function blackHawkDownStageResult(
           proposedEvidenceIds: [],
           proposedClaimIds: [],
         },
+        subjectIdentities: [],
         sourceCandidates: [],
         untrustedContent: [],
       });
@@ -334,6 +364,7 @@ export function blackHawkDownStageResult(
           contradictionIds: [],
           unresolvedClaimIds: [],
         },
+        subjectIdentities: [],
         sourceCandidates: [],
         untrustedContent: [],
       });
@@ -349,6 +380,7 @@ export function blackHawkDownStageResult(
           eligibleClaimIds: [],
           omittedClaimIds: [],
         },
+        subjectIdentities: [],
         sourceCandidates: [],
         untrustedContent: [],
       });

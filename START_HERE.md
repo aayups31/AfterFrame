@@ -25,7 +25,7 @@ Do not implement until you can explain all four statements:
 
 `prototype/`, the current starter components, diagrams, storyboards, and premium visual specifications are vision experiments. They may suggest atmosphere or interaction hypotheses, but they do not prescribe the production interface.
 
-The existing starter UI is a mocked vertical slice, not a production research engine. The deployed durable production foundation is tracked in `docs/46-build-checkpoint-03.md`; its boundaries, not the mock UI types or routes, are the implementation starting point.
+The existing starter UI is a mocked vertical slice, not a production research engine. The current durable production work is tracked in `docs/47-build-checkpoint-04a.md`; its boundaries, not the mock UI types or routes, are the implementation starting point. Migrations 001–007 are deployed; migration 008 remains a locally verified release candidate until the configured Supabase project values are corrected and the guarded rollback checks pass.
 
 To run it:
 

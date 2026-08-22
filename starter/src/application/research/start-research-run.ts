@@ -261,6 +261,7 @@ export function createStartResearchRunService(
         jobs: linkedJobs,
         attempts: [],
         outputs: [],
+        subjectIdentities: [],
         sourceCandidates: [],
         untrustedContent: [],
       });

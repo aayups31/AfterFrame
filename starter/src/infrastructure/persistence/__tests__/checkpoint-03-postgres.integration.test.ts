@@ -2,10 +2,14 @@ import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
 import { describe, expect, it } from "vitest";
+import { createDurableResearchWorkerService } from "@/application/research-worker/execute-durable-research-job";
 import { createStartResearchRunService } from "@/application/research/start-research-run";
 import type { InvestigationBranch } from "@/core/branches/schemas";
 import type { InvestigationCase } from "@/core/cases/schemas";
-import type { ResearchRunFingerprintPort } from "@/core/research-runs/ports";
+import type {
+  ClaimResearchJobInput,
+  ResearchRunFingerprintPort,
+} from "@/core/research-runs/ports";
 import { ResearchStageExecutionResultSchema } from "@/core/research-runs/schemas";
 import {
   BLACK_HAWK_DOWN_CASE,
@@ -18,6 +22,11 @@ import {
   type SupabaseRpcInvoker,
 } from "@/infrastructure/persistence/supabase-investigation-store";
 import { SupabaseResearchRunStartStore } from "@/infrastructure/persistence/supabase-research-run-start-store";
+import { SupabaseResearchIdentityReader } from "@/infrastructure/persistence/supabase-research-identity-reader";
+import {
+  afterFrameV1IdentityExecutionPlan,
+  createAfterFrameV1ResearchExecutorRegistry,
+} from "@/infrastructure/research/afterframe-v1-research-executor-registry";
 import { afterFrameV1SpecialistRegistry } from "@/specialists/registry";
 
 const integrationEnabled =
@@ -32,12 +41,14 @@ const checkpoint03RpcNames = [
   "af_reserve_research_run_start_v1",
   "af_release_research_run_start_reservation_v1",
   "af_commit_research_run_start_v1",
-  "af_claim_research_job_v1",
+  "af_claim_research_job_v2",
   "af_heartbeat_research_job_v1",
   "af_checkpoint_research_job_v1",
-  "af_complete_research_job_v1",
+  "af_complete_research_job_v2",
   "af_fail_research_job_v1",
   "af_release_research_job_v1",
+  "af_get_research_identity_context_v1",
+  "af_get_resolved_subject_identity_v1",
 ] as const;
 const allowedRpcNames = new Set<string>(checkpoint03RpcNames);
 
@@ -74,6 +85,25 @@ function loadDatabaseUrl() {
     );
   }
   return databaseUrl;
+}
+
+function loadTmdbApiKey() {
+  if (process.env.TMDB_API_KEY === undefined) {
+    try {
+      process.loadEnvFile(`${projectRoot}/.env.local`);
+    } catch {
+      throw new Error(
+        "Checkpoint-04A integration requires TMDB_API_KEY or starter/.env.local",
+      );
+    }
+  }
+  const apiKey = process.env.TMDB_API_KEY;
+  if (apiKey === undefined || apiKey.trim().length === 0) {
+    throw new Error(
+      "Checkpoint-04A integration requires a configured TMDB_API_KEY",
+    );
+  }
+  return apiKey;
 }
 
 function quoteIdentifier(identifier: string) {
@@ -307,7 +337,7 @@ async function seedCase(
 
 describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
   it(
-    "rolls back start, resumable handoff, reclaim, completion, and replay",
+    "rolls back start, idempotent identity completion, and replay",
     async () => {
       const client = new Client({
         connectionString: loadDatabaseUrl(),
@@ -392,11 +422,6 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
 
           const attemptId = randomUUID();
           const claimIdempotencyKey = "checkpoint-03:identity:claim-once";
-          const requestFingerprint = fingerprints.fingerprintAttemptRequest(
-            started.bundle.run.id,
-            job.id,
-            claimIdempotencyKey,
-          );
           const execution = {
             executorId: "identity-resolver",
             executorVersion: "1.0.0",
@@ -411,7 +436,7 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
             },
             tool: { id: "movie-identity", version: "1.0.0" },
             privateContentIncluded: false,
-            automaticRetrySafety: "RESUMABLE_PROVIDER_RUN" as const,
+            automaticRetrySafety: "IDEMPOTENT_PROVIDER_REQUEST" as const,
           };
           const claimInput = {
             actorId,
@@ -421,7 +446,6 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
             expectedRunVersion: started.bundle.run.aggregateVersion,
             expectedJobVersion: job.aggregateVersion,
             idempotencyKey: claimIdempotencyKey,
-            requestFingerprint,
             attemptId,
             workerId: "checkpoint-03-integration-worker-a",
             execution,
@@ -475,74 +499,11 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
             checkpoint: checkpointed.checkpoint,
           });
 
-          const releaseTime = await databaseTimestamp(client);
-          const handoffInput = {
-            actorId,
-            lease:
-              checkpointReplay.status === "REPLAY"
-                ? checkpointReplay.lease
-                : checkpointed.lease,
-            idempotencyKey: "checkpoint-03:release-once",
-            failure: {
-              schemaVersion: 1 as const,
-              code: "provider-timeout",
-              category: "TIMEOUT" as const,
-              phase: "EXTERNAL_CALL" as const,
-              retryDirective: "RETRY_WITH_BACKOFF" as const,
-              retryAfterMs: 100,
-              providerStatusCode: null,
-              diagnosticFingerprint: sha256("checkpoint-03-timeout"),
-              redactionState: "BODY_FREE" as const,
-            },
-            execution: {
-              telemetryState: "PARTIAL" as const,
-              providerRunId,
-              usage: null,
-              cost: null,
-              latencyMs: 100,
-              completedAt: releaseTime,
-            },
-          };
-          const released = await workerStore.releaseResearchJob(handoffInput);
-          expect(released.status).toBe("RELEASED");
-          if (released.status !== "RELEASED") {
-            throw new Error("Resumable attempt was not released");
-          }
-          const releaseReplay = await workerStore.releaseResearchJob(
-            handoffInput,
-          );
-          expect(releaseReplay).toMatchObject({
-            status: "REPLAY",
-            attemptId,
-            retryAt: released.retryAt,
-          });
-
-          await waitForRetry(client, released.retryAt);
-          const reclaimed = await workerStore.claimResearchJob({
-            ...claimInput,
-            workerId: "checkpoint-03-integration-worker-b",
-          });
-          expect(reclaimed.status).toBe("CLAIMED");
-          if (reclaimed.status !== "CLAIMED") {
-            throw new Error("Released attempt was not reclaimed");
-          }
-          expect(reclaimed.claim.attempt.id).toBe(attemptId);
-          expect(reclaimed.claim.lease.leaseEpoch).toBe(
-            claimed.claim.lease.leaseEpoch + 1,
-          );
-          expect(reclaimed.claim.resumed).toBe(true);
-          expect(reclaimed.claim.replayed).toBe(true);
-          expect(reclaimed.claim.latestCheckpoint).toEqual(
-            checkpointed.checkpoint,
-          );
-          expect(reclaimed.claim.providerCheckpoint).toEqual(
-            checkpointed.checkpoint,
-          );
-
           const completionTime = await databaseTimestamp(client);
+          const subjectIdentityId = randomUUID();
           const result = ResearchStageExecutionResultSchema.parse({
-            outcome: "SUCCEEDED",
-            boundedReasonCodes: [],
+            outcome: "DEGRADED",
+            boundedReasonCodes: ["identity-requirements-unresolved"],
             output: {
               schemaVersion: 1,
               id: randomUUID(),
@@ -558,19 +519,57 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
                 { recordType: "ATTEMPT", recordId: attemptId },
               ],
               createdAt: completionTime,
+              subjectIdentityId,
               resolvedRequirementIds: ["tmdb-film"],
               unresolvedRequirementIds: ["film-version"],
             },
+            subjectIdentities: [
+              {
+                schemaVersion: 1,
+                id: subjectIdentityId,
+                caseId,
+                runId: started.bundle.run.id,
+                jobId: job.id,
+                attemptId,
+                subjectRefFingerprint:
+                  claimed.claim.inputManifest.manifest.subjectRefFingerprint,
+                publicIdentity: {
+                  displayName: "Checkpoint worker fixture film",
+                  alternateNames: [],
+                  disambiguators: [
+                    { label: "provider-id", value: "855" },
+                  ],
+                  identityFingerprint: sha256(
+                    "checkpoint-03-worker-fixture-identity",
+                  ),
+                  dataClass: "PUBLIC",
+                  verificationState: "RESOLVER_VERIFIED",
+                  resolver: { id: "movie-identity", version: "1.0.0" },
+                  resolvedAt: completionTime,
+                },
+                evidenceStatus: "NOT_EVIDENCE",
+                reviewState: "PROPOSED",
+                publicationAuthority: "NONE",
+                provenanceInputs: [
+                  { recordType: "JOB", recordId: job.id },
+                  { recordType: "ATTEMPT", recordId: attemptId },
+                ],
+                createdAt: completionTime,
+              },
+            ],
             sourceCandidates: [],
             untrustedContent: [],
           });
           const completeInput = {
             actorId,
-            lease: reclaimed.claim.lease,
+            lease:
+              checkpointReplay.status === "REPLAY"
+                ? checkpointReplay.lease
+                : checkpointed.lease,
             idempotencyKey: "checkpoint-03:complete-once",
             result,
             outputFingerprint:
-              fingerprints.fingerprintExecutionOutput(result.output),
+              fingerprints.fingerprintExecutionOutput(result),
             execution: {
               telemetryState: "COMPLETE" as const,
               providerRunId,
@@ -595,16 +594,16 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
           );
           expect(completed).toMatchObject({
             status: "COMMITTED",
-            outcome: "SUCCEEDED",
-            terminal: { attemptId, jobStatus: "SUCCEEDED" },
+            outcome: "DEGRADED",
+            terminal: { attemptId, jobStatus: "DEGRADED" },
           });
           const completionReplay = await workerStore.completeResearchJob(
             completeInput,
           );
           expect(completionReplay).toMatchObject({
             status: "REPLAY",
-            outcome: "SUCCEEDED",
-            terminal: { attemptId, jobStatus: "SUCCEEDED" },
+            outcome: "DEGRADED",
+            terminal: { attemptId, jobStatus: "DEGRADED" },
           });
           const terminalClaim = await workerStore.claimResearchJob({
             ...claimInput,
@@ -613,7 +612,7 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
           expect(terminalClaim).toMatchObject({
             status: "TERMINAL",
             replayed: true,
-            terminal: { attemptId, jobStatus: "SUCCEEDED" },
+            terminal: { attemptId, jobStatus: "DEGRADED" },
           });
 
           const startReplay = await startResearch(
@@ -643,7 +642,7 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
           expect(durableCounts.rows[0]).toEqual({
             attempts: "1",
             checkpoints: "1",
-            handoffs: "1",
+            handoffs: "0",
             outputs: "1",
           });
 
@@ -670,5 +669,429 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
       }
     },
     60_000,
+  );
+
+  it(
+    "durably resolves a generic movie identity and causally binds SCOPING",
+    async () => {
+      const client = new Client({
+        connectionString: loadDatabaseUrl(),
+        ssl: { rejectUnauthorized: false },
+        application_name: "afterframe-checkpoint-04a-integration",
+      });
+      try {
+        try {
+          await client.connect();
+        } catch {
+          throw new Error(
+            "Checkpoint-04A integration could not connect using SUPABASE_DB_URL",
+          );
+        }
+
+        const deployedFunctions = await checkpoint03FunctionsAreDeployed(client);
+        expect([...deployedFunctions].sort()).toEqual(
+          [...checkpoint03RpcNames].sort(),
+        );
+        const actorId = randomUUID();
+        const caseId = randomUUID();
+        const branchId = randomUUID();
+        const exactCuriosity =
+          "How did production choices shape this film's visual language?";
+        const investigationCase: InvestigationCase = {
+          ...BLACK_HAWK_DOWN_CASE,
+          id: caseId,
+          ownerId: actorId,
+          subjectRef: {
+            type: "film",
+            id: "tmdb:movie:603",
+            versionId: null,
+          },
+          exactCuriosity,
+          activeBranchId: branchId,
+        };
+        const rootBranch: InvestigationBranch = {
+          ...BLACK_HAWK_DOWN_ROOT_BRANCH,
+          id: branchId,
+          caseId,
+          title: "Production choices and visual form",
+          normalizedObjective:
+            "Investigate how production decisions shaped the film's visual form without assuming a single author or intention.",
+          researchAxisIds: ["film-form", "production-authorship"],
+          unresolvedQuestions: [
+            "Which production decisions are supported by inspectable sources?",
+          ],
+        };
+        const researchCommand = {
+          caseId,
+          branchId,
+          expectedCaseVersion: investigationCase.aggregateVersion,
+          idempotencyKey: "checkpoint-04a:generic-movie:research-run:v1",
+        };
+        const baselineTableCounts = await afTableCounts(client);
+        const baselineActorCount = await fixtureActorCount(client, actorId);
+        expect(baselineActorCount).toBe(0n);
+
+        await client.query("begin");
+        let lifecycleError: unknown;
+        let rpcFailure: RpcFailure | undefined;
+        try {
+          await seedCase(client, investigationCase, rootBranch);
+          const invokeRpc = transactionalRpcInvoker(client, (failure) => {
+            rpcFailure = failure;
+          });
+          const investigationStore = new SupabaseInvestigationStore({
+            actorId,
+            invokeRpc,
+          });
+          const startStore = new SupabaseResearchRunStartStore({
+            actorId,
+            invokeRpc,
+            reservationLeaseSeconds: 60,
+          });
+          const workerStore = new SupabaseDurableResearchWorkerStore({
+            actorId,
+            invokeRpc,
+          });
+          const startedAt = await databaseTimestamp(client);
+          const startResearch = createStartResearchRunService({
+            context: investigationStore,
+            store: startStore,
+            specialists: afterFrameV1SpecialistRegistry,
+            fingerprints,
+            createId: () => randomUUID(),
+            now: () => startedAt,
+          });
+          const started = await startResearch(actorId, researchCommand);
+          expect(started.replayed).toBe(false);
+          expect(started.bundle.subjectIdentities).toEqual([]);
+          const identityJob = started.bundle.jobs[0];
+          if (identityJob === undefined || identityJob.stage !== "IDENTITY") {
+            throw new Error("Research start did not stage IDENTITY first");
+          }
+
+          const registry = createAfterFrameV1ResearchExecutorRegistry({
+            actorId,
+            invokeRpc,
+            tmdbApiKey: loadTmdbApiKey(),
+            resolverTimeoutMs: 20_000,
+            createId: () => randomUUID(),
+            now: () => new Date(),
+          });
+          expect(registry.resolve("IDENTITY")?.identity.execution).toEqual(
+            afterFrameV1IdentityExecutionPlan(20_000),
+          );
+          const executeIdentity = createDurableResearchWorkerService({
+            store: workerStore,
+            executors: registry,
+            fingerprints,
+            workerId: "checkpoint-04a-identity-worker",
+            leaseDurationSeconds: 60,
+            heartbeatIntervalMs: 1_000,
+            createId: () => randomUUID(),
+            now: () => new Date().toISOString(),
+          });
+          const identityExecution = await executeIdentity(actorId, {
+            runId: started.bundle.run.id,
+            jobId: identityJob.id,
+            stage: "IDENTITY",
+            expectedRunVersion: started.bundle.run.aggregateVersion,
+            expectedJobVersion: identityJob.aggregateVersion,
+            idempotencyKey: "checkpoint-04a:generic-movie:identity:v1",
+          });
+          expect(["SUCCEEDED", "DEGRADED"]).toContain(
+            identityExecution.disposition,
+          );
+
+          const identityRows = await client.query<{
+            identity_id: string;
+            identity_fingerprint: string;
+            output_id: string;
+            output_fingerprint: string;
+            attempt_id: string;
+            job_id: string;
+            identity_manifest: unknown;
+          }>(
+            `select identity.id::text as identity_id,
+               identity.identity_fingerprint::text as identity_fingerprint,
+               output.id::text as output_id,
+               attempt.output_fingerprint::text as output_fingerprint,
+               attempt.id::text as attempt_id,
+               attempt.job_id::text as job_id,
+               manifest.manifest as identity_manifest
+             from public.af_resolved_subject_identities identity
+             join public.af_research_stage_outputs output
+               on output.run_id = identity.run_id
+              and output.attempt_id = identity.attempt_id
+              and output.subject_identity_id = identity.id
+             join public.af_research_attempts attempt
+               on attempt.id = identity.attempt_id
+             join public.af_research_attempt_input_manifests manifest
+               on manifest.attempt_id = identity.attempt_id
+             where identity.run_id = $1`,
+            [started.bundle.run.id],
+          );
+          expect(identityRows.rows).toHaveLength(1);
+          const identityRow = identityRows.rows[0];
+          if (identityRow === undefined) {
+            throw new Error("Identity completion did not persist its record");
+          }
+          expect(identityRow.identity_manifest).toMatchObject({
+            stage: "IDENTITY",
+            dependency: { state: "ROOT" },
+            subjectIdentity: { state: "UNBOUND" },
+          });
+          expect(JSON.stringify(identityRow.identity_manifest)).not.toContain(
+            exactCuriosity,
+          );
+
+          const identityReader = new SupabaseResearchIdentityReader({
+            actorId,
+            invokeRpc,
+          });
+          const resolvedIdentity = await identityReader.getResolvedSubjectIdentity({
+            actorId,
+            runId: started.bundle.run.id,
+          });
+          expect(resolvedIdentity).toMatchObject({
+            id: identityRow.identity_id,
+            evidenceStatus: "NOT_EVIDENCE",
+            publicationAuthority: "NONE",
+            publicIdentity: {
+              dataClass: "PUBLIC",
+              verificationState: "RESOLVER_VERIFIED",
+              resolver: { id: "tmdb-movie-details", version: "v3" },
+            },
+          });
+          expect(JSON.stringify(resolvedIdentity)).not.toContain(
+            exactCuriosity,
+          );
+
+          const nextState = await client.query<{
+            run_version: string;
+            job_id: string;
+            job_version: string;
+            job_status: string;
+          }>(
+            `select run.aggregate_version::text as run_version,
+               job.id::text as job_id,
+               job.aggregate_version::text as job_version,
+               job.status::text as job_status
+             from public.af_research_runs run
+             join public.af_research_jobs job on job.run_id = run.id
+             where run.id = $1 and job.stage = 'SCOPING'`,
+            [started.bundle.run.id],
+          );
+          const scopingState = nextState.rows[0];
+          if (scopingState === undefined) {
+            throw new Error("Identity completion did not expose SCOPING");
+          }
+          expect(scopingState.job_status).toBe("QUEUED");
+          const scopingExecutionPlan = {
+            executorId: "checkpoint-04a-scoping-manifest-probe",
+            executorVersion: "1.0.0",
+            configurationFingerprint: sha256(
+              "checkpoint-04a-scoping-manifest-probe",
+            ),
+            executionKind: "TOOL" as const,
+            model: null,
+            prompt: null,
+            schema: {
+              id: "scoping-manifest-probe",
+              version: "1.0.0",
+              schemaFingerprint: sha256(
+                "checkpoint-04a-scoping-manifest-probe-schema",
+              ),
+            },
+            tool: { id: "scoping-provider-probe", version: "1.0.0" },
+            privateContentIncluded: false,
+            automaticRetrySafety: "RESUMABLE_PROVIDER_RUN" as const,
+          };
+          const scopingAttemptId = randomUUID();
+          const scopingClaimInput = {
+            actorId,
+            runId: started.bundle.run.id,
+            jobId: scopingState.job_id,
+            stage: "SCOPING" as const,
+            expectedRunVersion: Number(scopingState.run_version),
+            expectedJobVersion: Number(scopingState.job_version),
+            idempotencyKey: "checkpoint-04a:generic-movie:scoping:v1",
+            attemptId: scopingAttemptId,
+            workerId: "checkpoint-04a-scoping-probe",
+            execution: scopingExecutionPlan,
+            leaseDurationSeconds: 60,
+          } satisfies ClaimResearchJobInput;
+          const scopingClaim = await workerStore.claimResearchJob(
+            scopingClaimInput,
+          );
+          expect(scopingClaim.status).toBe("CLAIMED");
+          if (scopingClaim.status !== "CLAIMED") {
+            throw new Error("SCOPING did not receive a causal claim");
+          }
+          expect(scopingClaim.claim.inputManifest.manifest).toMatchObject({
+            stage: "SCOPING",
+            dependency: {
+              state: "BOUND",
+              predecessorJobId: identityRow.job_id,
+              predecessorAttemptId: identityRow.attempt_id,
+              predecessorOutputId: identityRow.output_id,
+              predecessorOutputFingerprint: identityRow.output_fingerprint,
+            },
+            subjectIdentity: {
+              state: "BOUND",
+              subjectIdentityId: identityRow.identity_id,
+              identityFingerprint: identityRow.identity_fingerprint,
+            },
+          });
+          const serializedManifest = JSON.stringify(
+            scopingClaim.claim.inputManifest,
+          );
+          expect(serializedManifest).not.toContain(exactCuriosity);
+          expect(serializedManifest).not.toContain(
+            resolvedIdentity?.publicIdentity.displayName ?? "unreachable-name",
+          );
+          expect(scopingClaim.claim.attempt.requestFingerprint).toBe(
+            scopingClaim.claim.lease.externalIdempotencyKey,
+          );
+
+          const scopingProviderRunId = "checkpoint-04a-scoping-provider-run";
+          const scopingCheckpoint = await workerStore.checkpointResearchJob({
+            actorId,
+            lease: scopingClaim.claim.lease,
+            checkpoint: {
+              schemaVersion: 1,
+              id: randomUUID(),
+              runId: started.bundle.run.id,
+              jobId: scopingState.job_id,
+              attemptId: scopingAttemptId,
+              idempotencyKey: "checkpoint-04a:scoping:provider-accepted:v1",
+              sequence: 1,
+              kind: "PROVIDER_ACCEPTED",
+              completedUnits: 0,
+              totalUnits: 1,
+              providerRunId: scopingProviderRunId,
+              resumeTokenFingerprint: sha256(
+                "checkpoint-04a-scoping-resume-token",
+              ),
+              outputFingerprint: null,
+              publicationAuthority: "NONE",
+              createdAt: await databaseTimestamp(client),
+            },
+            leaseDurationSeconds: 60,
+          });
+          expect(scopingCheckpoint.status).toBe("COMMITTED");
+          if (scopingCheckpoint.status !== "COMMITTED") {
+            throw new Error("SCOPING provider checkpoint was not committed");
+          }
+          const scopingRelease = await workerStore.releaseResearchJob({
+            actorId,
+            lease: scopingCheckpoint.lease,
+            idempotencyKey: "checkpoint-04a:scoping:release:v1",
+            failure: {
+              schemaVersion: 1,
+              code: "provider-timeout",
+              category: "TIMEOUT",
+              phase: "EXTERNAL_CALL",
+              retryDirective: "RETRY_WITH_BACKOFF",
+              retryAfterMs: 100,
+              providerStatusCode: null,
+              diagnosticFingerprint: sha256(
+                "checkpoint-04a-scoping-timeout",
+              ),
+              redactionState: "BODY_FREE",
+            },
+            execution: {
+              telemetryState: "PARTIAL",
+              providerRunId: scopingProviderRunId,
+              usage: null,
+              cost: null,
+              latencyMs: 100,
+              completedAt: await databaseTimestamp(client),
+            },
+          });
+          expect(scopingRelease.status).toBe("RELEASED");
+          if (scopingRelease.status !== "RELEASED") {
+            throw new Error("SCOPING attempt was not released for resume");
+          }
+          await waitForRetry(client, scopingRelease.retryAt);
+          const scopingReclaim = await workerStore.claimResearchJob({
+            ...scopingClaimInput,
+            workerId: "checkpoint-04a-scoping-reclaimer",
+          });
+          expect(scopingReclaim.status).toBe("CLAIMED");
+          if (scopingReclaim.status !== "CLAIMED") {
+            throw new Error("SCOPING attempt was not durably reclaimed");
+          }
+          expect(scopingReclaim.claim.attempt.id).toBe(scopingAttemptId);
+          expect(scopingReclaim.claim.lease.leaseEpoch).toBe(
+            scopingClaim.claim.lease.leaseEpoch + 1,
+          );
+          expect(scopingReclaim.claim.providerCheckpoint).toEqual(
+            scopingCheckpoint.checkpoint,
+          );
+          expect(scopingReclaim.claim.inputManifest).toEqual(
+            scopingClaim.claim.inputManifest,
+          );
+
+          const durableCounts = await client.query<{
+            attempts: string;
+            checkpoints: string;
+            handoffs: string;
+            identities: string;
+            manifests: string;
+            outputs: string;
+          }>(
+            `select
+               (select count(*)::text
+                  from public.af_research_attempts
+                  where run_id = $1) as attempts,
+               (select count(*)::text
+                  from public.af_research_attempt_checkpoints
+                  where run_id = $1) as checkpoints,
+               (select count(*)::text
+                  from public.af_research_attempt_handoffs
+                  where run_id = $1) as handoffs,
+               (select count(*)::text
+                  from public.af_resolved_subject_identities
+                  where run_id = $1) as identities,
+               (select count(*)::text
+                  from public.af_research_attempt_input_manifests
+                  where run_id = $1) as manifests,
+               (select count(*)::text
+                  from public.af_research_stage_outputs
+                  where run_id = $1) as outputs`,
+            [started.bundle.run.id],
+          );
+          expect(durableCounts.rows[0]).toEqual({
+            attempts: "2",
+            checkpoints: "1",
+            handoffs: "1",
+            identities: "1",
+            manifests: "2",
+            outputs: "1",
+          });
+
+          throw rollbackSentinel;
+        } catch (error) {
+          lifecycleError = error;
+        }
+
+        await client.query("rollback");
+        expect(await afTableCounts(client)).toEqual(baselineTableCounts);
+        expect(await fixtureActorCount(client, actorId)).toBe(
+          baselineActorCount,
+        );
+        if (lifecycleError !== rollbackSentinel) {
+          if (rpcFailure !== undefined) {
+            throw new Error(
+              `Checkpoint-04A RPC ${rpcFailure.functionName} failed with SQLSTATE ${rpcFailure.code ?? "unknown"}: ${rpcFailure.diagnostic}`,
+            );
+          }
+          throw lifecycleError;
+        }
+      } finally {
+        await client.end().catch(() => undefined);
+      }
+    },
+    90_000,
   );
 });

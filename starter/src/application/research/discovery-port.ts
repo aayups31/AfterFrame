@@ -5,6 +5,7 @@ import {
   RightsStateSchema,
   SourceMediumSchema,
 } from "@/core/research/schemas";
+import { ResolvedPublicSubjectIdentitySchema } from "@/core/research/subject-identity";
 import {
   ExecutionMetadataSchema,
   NoPublicationAuthoritySchema,
@@ -12,12 +13,13 @@ import {
 import {
   EntityIdSchema,
   HttpUrlSchema,
-  IsoDateTimeSchema,
   OpaqueReferenceSchema,
   Sha256Schema,
   SlugSchema,
-  VersionTagSchema,
 } from "@/core/shared/schemas";
+
+export { ResolvedPublicSubjectIdentitySchema } from "@/core/research/subject-identity";
+export type { ResolvedPublicSubjectIdentity } from "@/core/research/subject-identity";
 
 const ExactBoundedTextSchema = z
   .string()
@@ -26,45 +28,6 @@ const ExactBoundedTextSchema = z
   .refine((text) => text.trim().length >= 3, {
     message: "Text must contain at least three non-whitespace characters",
   });
-
-const PublicIdentityNameSchema = z
-  .string()
-  .min(1)
-  .max(500)
-  .refine((text) => text.trim().length > 0, {
-    message: "Public identity names cannot be whitespace-only",
-  });
-
-/**
- * Resolver-supplied public context for any subject domain. The discovery
- * worker must not infer this identity from a model answer or user assertion.
- */
-export const ResolvedPublicSubjectIdentitySchema = z
-  .object({
-    displayName: PublicIdentityNameSchema,
-    alternateNames: z.array(PublicIdentityNameSchema).max(30),
-    disambiguators: z
-      .array(
-        z
-          .object({
-            label: SlugSchema,
-            value: z.string().trim().min(1).max(500),
-          })
-          .strict(),
-      )
-      .max(30),
-    identityFingerprint: Sha256Schema,
-    dataClass: z.literal("PUBLIC"),
-    verificationState: z.literal("RESOLVER_VERIFIED"),
-    resolver: z
-      .object({
-        id: SlugSchema,
-        version: VersionTagSchema,
-      })
-      .strict(),
-    resolvedAt: IsoDateTimeSchema,
-  })
-  .strict();
 
 export const ResearchDiscoveryAxisInputSchema = z
   .object({
@@ -169,9 +132,6 @@ export function parseResearchDiscoveryOutputForInput(
   return output;
 }
 
-export type ResolvedPublicSubjectIdentity = z.infer<
-  typeof ResolvedPublicSubjectIdentitySchema
->;
 export type ResearchDiscoveryInput = z.infer<
   typeof ResearchDiscoveryInputSchema
 >;

@@ -16,6 +16,7 @@ import {
   ResearchStageExecutionResultSchema,
   ResearchStageSchema,
 } from "@/core/research-runs/schemas";
+import { ResearchAttemptInputManifestEnvelopeSchema } from "@/core/research-runs/input-manifests";
 import {
   EntityIdSchema,
   IsoDateTimeSchema,
@@ -351,6 +352,7 @@ export const ClaimedResearchJobSchema = z
     attempt: ResearchAttemptRecordSchema,
     lease: ResearchJobLeaseCursorSchema,
     execution: ResearchWorkerExecutionPlanSchema,
+    inputManifest: ResearchAttemptInputManifestEnvelopeSchema,
     latestCheckpoint: ResearchWorkerCheckpointRecordSchema.nullable(),
     providerCheckpoint: ResearchWorkerCheckpointRecordSchema.nullable(),
     resumed: z.boolean(),
@@ -358,6 +360,7 @@ export const ClaimedResearchJobSchema = z
   })
   .strict()
   .superRefine((claim, context) => {
+    const manifest = claim.inputManifest.manifest;
     if (
       claim.job.runId !== claim.run.id ||
       claim.plan.runId !== claim.run.id ||
@@ -370,6 +373,49 @@ export const ClaimedResearchJobSchema = z
       context.addIssue({
         code: "custom",
         message: "Claim records must belong to one run, job, and attempt",
+      });
+    }
+    if (
+      manifest.runId !== claim.run.id ||
+      manifest.caseId !== claim.run.caseId ||
+      manifest.branchId !== claim.run.branchId ||
+      manifest.planId !== claim.plan.id ||
+      manifest.jobId !== claim.job.id ||
+      manifest.stage !== claim.job.stage ||
+      manifest.objectiveFingerprint !== claim.run.objectiveFingerprint ||
+      manifest.runRequestFingerprint !== claim.run.requestFingerprint ||
+      manifest.planFingerprint !== claim.plan.planFingerprint ||
+      manifest.stageSeedFingerprint !== claim.job.stageInputFingerprint
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["inputManifest", "manifest"],
+        message:
+          "The database-authored input manifest must bind the claimed run, plan, job, and immutable fingerprints",
+      });
+    }
+    if (
+      (claim.job.dependsOnJobId === null) !==
+      (manifest.dependency.state === "ROOT")
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["inputManifest", "manifest", "dependency"],
+        message: "Manifest dependency state must match the logical job",
+      });
+    } else if (
+      manifest.dependency.state === "BOUND" &&
+      manifest.dependency.predecessorJobId !== claim.job.dependsOnJobId
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: [
+          "inputManifest",
+          "manifest",
+          "dependency",
+          "predecessorJobId",
+        ],
+        message: "Manifest must bind the immediate predecessor job",
       });
     }
     if (

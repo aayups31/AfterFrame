@@ -38,7 +38,6 @@ export const ClaimResearchJobLeaseCommandSchema = z
     expectedRunVersion: z.number().int().nonnegative(),
     expectedJobVersion: z.number().int().nonnegative(),
     idempotencyKey: ResearchIdempotencyKeySchema,
-    requestFingerprint: Sha256Schema,
     attemptId: EntityIdSchema,
     workerId: OpaqueReferenceSchema,
     execution: ResearchWorkerExecutionPlanSchema,

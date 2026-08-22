@@ -88,12 +88,25 @@ export const SpecialistResearchPlanSchema = z
   .object({
     axes: z.array(SpecialistResearchAxisPlanSchema).min(1),
     sourceClassIds: z.array(SlugSchema).min(1),
-    identityRequirements: z.array(SpecialistIdentityRequirementSchema),
+    identityRequirements: z
+      .array(SpecialistIdentityRequirementSchema)
+      .max(50),
     coverageGaps: z.array(z.string().trim().min(1).max(1_000)),
   })
   .strict()
   .superRefine((plan, context) => {
     const policyIds = new Set(plan.sourceClassIds);
+    const requirementIds = new Set<string>();
+    plan.identityRequirements.forEach((requirement, requirementIndex) => {
+      if (requirementIds.has(requirement.id)) {
+        context.addIssue({
+          code: "custom",
+          path: ["identityRequirements", requirementIndex, "id"],
+          message: "Identity requirement IDs must be unique within a plan",
+        });
+      }
+      requirementIds.add(requirement.id);
+    });
     plan.axes.forEach((axis, axisIndex) => {
       axis.sourceClassIds.forEach((sourceClassId, sourceIndex) => {
         if (!policyIds.has(sourceClassId)) {

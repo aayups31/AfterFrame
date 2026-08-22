@@ -93,6 +93,95 @@ describe("research-run durable schemas", () => {
     expect(ResearchRunBundleSchema.safeParse(detached).success).toBe(false);
   });
 
+  it("requires exactly one output for every successful durable attempt", () => {
+    const result = blackHawkDownStageResult("IDENTITY", ATTEMPT_ID, LATER);
+    const completedAttempt = {
+      ...runningAttempt(),
+      status: "DEGRADED" as const,
+      execution: {
+        ...runningAttempt().execution,
+        latencyMs: 1,
+      },
+      outputFingerprint: "b".repeat(64),
+      aggregateVersion: 1,
+      completedAt: LATER,
+    };
+    const completedBundle = {
+      ...BLACK_HAWK_DOWN_RESEARCH_BUNDLE,
+      run: {
+        ...BLACK_HAWK_DOWN_RESEARCH_BUNDLE.run,
+        status: "RUNNING" as const,
+        health: "DEGRADED" as const,
+        currentStage: "SCOPING" as const,
+        aggregateVersion: 2,
+        updatedAt: LATER,
+        startedAt: BLACK_HAWK_DOWN_RESEARCH_TIME,
+      },
+      jobs: BLACK_HAWK_DOWN_RESEARCH_BUNDLE.jobs.map((job) =>
+        job.stage === "IDENTITY"
+          ? {
+              ...job,
+              status: "DEGRADED" as const,
+              attemptCount: 1,
+              firstStartedAt: BLACK_HAWK_DOWN_RESEARCH_TIME,
+              terminalAt: LATER,
+              aggregateVersion: 2,
+              updatedAt: LATER,
+            }
+          : job,
+      ),
+      attempts: [completedAttempt],
+      outputs: [result.output],
+      subjectIdentities: result.subjectIdentities,
+    };
+    expect(ResearchRunBundleSchema.safeParse(completedBundle).success).toBe(
+      true,
+    );
+
+    const missingOutput = ResearchRunBundleSchema.safeParse({
+      ...completedBundle,
+      outputs: [],
+      subjectIdentities: [],
+    });
+    expect(missingOutput.success).toBe(false);
+    if (!missingOutput.success) {
+      expect(missingOutput.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            message:
+              "Every SUCCEEDED or DEGRADED attempt requires exactly one stage output",
+          }),
+        ]),
+      );
+    }
+
+    const outputBeforeCompletion = ResearchRunBundleSchema.safeParse({
+      ...completedBundle,
+      jobs: completedBundle.jobs.map((job) =>
+        job.stage === "IDENTITY"
+          ? {
+              ...job,
+              status: "RUNNING" as const,
+              activeAttemptId: ATTEMPT_ID,
+              terminalAt: null,
+            }
+          : job,
+      ),
+      attempts: [runningAttempt()],
+    });
+    expect(outputBeforeCompletion.success).toBe(false);
+    if (!outputBeforeCompletion.success) {
+      expect(outputBeforeCompletion.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            message:
+              "A persisted stage output requires a SUCCEEDED or DEGRADED attempt",
+          }),
+        ]),
+      );
+    }
+  });
+
   it("keeps a discovery candidate structurally separate from evidence", () => {
     const result = blackHawkDownStageResult(
       "DISCOVERY",
@@ -321,6 +410,69 @@ describe("research-run durable schemas", () => {
       ResearchStageExecutionResultSchema.safeParse({
         ...result,
         publishedBeat: { body: "collapsed generated answer" },
+      }).success,
+    ).toBe(false);
+    expect(
+      ResearchStageExecutionResultSchema.safeParse({
+        ...result,
+        subjectIdentities: [],
+      }).success,
+    ).toBe(false);
+    expect(
+      ResearchStageExecutionResultSchema.safeParse({
+        ...result,
+        outcome: "SUCCEEDED",
+        boundedReasonCodes: [],
+      }).success,
+    ).toBe(false);
+    expect(
+      ResearchStageExecutionResultSchema.safeParse({
+        ...result,
+        boundedReasonCodes: [
+          "identity-requirements-unresolved",
+          "untrusted-extra-reason",
+        ],
+      }).success,
+    ).toBe(false);
+    if (result.output.kind !== "IDENTITY_RESULT") {
+      throw new Error("Fixture did not produce identity output");
+    }
+    expect(
+      ResearchStageExecutionResultSchema.safeParse({
+        ...result,
+        output: {
+          ...result.output,
+          resolvedRequirementIds: ["tmdb-film", "tmdb-film"],
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      ResearchStageExecutionResultSchema.safeParse({
+        ...result,
+        output: {
+          ...result.output,
+          unresolvedRequirementIds: ["film-version", "tmdb-film"],
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      ResearchStageExecutionResultSchema.safeParse({
+        ...result,
+        subjectIdentities: [
+          ...result.subjectIdentities,
+          {
+            ...result.subjectIdentities[0],
+            id: "30000000-0000-4000-8000-000000000099",
+          },
+        ],
+      }).success,
+    ).toBe(false);
+
+    const scoping = blackHawkDownStageResult("SCOPING", ATTEMPT_ID, LATER);
+    expect(
+      ResearchStageExecutionResultSchema.safeParse({
+        ...scoping,
+        subjectIdentities: result.subjectIdentities,
       }).success,
     ).toBe(false);
   });

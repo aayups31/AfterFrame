@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { ResearchWorkerExecutionTelemetrySchema } from "@/core/research-runs/worker-schemas";
 import { MovieSubjectSchema, type MovieSubject } from "@/specialists/movie/subject";
 import {
   EntityIdSchema,
@@ -11,6 +12,8 @@ const RESOLVER_ID = "tmdb-movie-details" as const;
 const RESOLVER_VERSION = "v3" as const;
 const TOOL_NAME = "tmdb.movie-details" as const;
 const OUTPUT_SCHEMA_VERSION = "movie-identity-v1" as const;
+const MAX_PROVIDER_BODY_BYTES = 1_048_576;
+export const MAX_TMDB_RETRY_AFTER_MS = 86_400_000;
 
 const TmdbMovieDetailsResponseSchema = z.object({
   id: z.number().int().positive().safe(),
@@ -59,7 +62,7 @@ export const MovieIdentityResolutionAttemptSchema = z
     latencyMs: z.number().int().nonnegative(),
     httpStatus: z.number().int().min(100).max(599).nullable(),
     providerRequestId: z.string().trim().min(1).max(256).nullable(),
-    estimatedCostUsd: z.literal(0),
+    telemetry: ResearchWorkerExecutionTelemetrySchema,
     origin: RecordOriginSchema,
   })
   .strict()
@@ -114,7 +117,12 @@ export const MovieIdentityResolutionSchema = z.discriminatedUnion("state", [
     .object({
       state: z.literal("RATE_LIMITED"),
       providerRef: z.string().regex(/^tmdb:movie:[1-9][0-9]*$/),
-      retryAfterMs: z.number().int().nonnegative().nullable(),
+      retryAfterMs: z
+        .number()
+        .int()
+        .nonnegative()
+        .max(MAX_TMDB_RETRY_AFTER_MS)
+        .nullable(),
       attempt: MovieIdentityResolutionAttemptSchema,
     })
     .strict(),
@@ -156,13 +164,23 @@ function normalizeReleaseDate(value: string | null | undefined): string | null {
 
 function parseRetryAfter(value: string | null, nowMs: number): number | null {
   if (value === null) return null;
-  const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds >= 0) {
-    return Math.round(seconds * 1_000);
+  const normalized = value.trim();
+  if (/^\d+$/.test(normalized)) {
+    const seconds = Number(normalized);
+    if (
+      !Number.isFinite(seconds) ||
+      seconds >= MAX_TMDB_RETRY_AFTER_MS / 1_000
+    ) {
+      return MAX_TMDB_RETRY_AFTER_MS;
+    }
+    return seconds * 1_000;
   }
-  const dateMs = Date.parse(value);
+  const dateMs = Date.parse(normalized);
   if (Number.isNaN(dateMs)) return null;
-  return Math.max(0, dateMs - nowMs);
+  return Math.min(
+    MAX_TMDB_RETRY_AFTER_MS,
+    Math.max(0, dateMs - nowMs),
+  );
 }
 
 function safeProviderRequestId(value: string | null): string | null {
@@ -171,6 +189,79 @@ function safeProviderRequestId(value: string | null): string | null {
   return normalized.length >= 1 && normalized.length <= 256
     ? normalized
     : null;
+}
+
+function boundedCallerAbort() {
+  return new DOMException("Movie identity resolution was aborted", "AbortError");
+}
+
+function callerAborted(signal: AbortSignal | undefined) {
+  return signal?.aborted === true;
+}
+
+function cancelUnusedProviderBody(response: Response) {
+  const body = response.body;
+  if (body === null || body === undefined || body.locked) return;
+  try {
+    void body.cancel().catch(() => undefined);
+  } catch {
+    // A hostile or non-standard stream cannot be allowed to replace the
+    // bounded status outcome with its own cancellation error.
+  }
+}
+
+type BoundedProviderBody =
+  | Readonly<{ state: "READ"; bytesRead: number; text: string }>
+  | Readonly<{ state: "OVERSIZED"; bytesRead: number }>;
+
+/**
+ * Consume hostile provider data through the stream boundary so a missing or
+ * dishonest Content-Length cannot force an unbounded response.text() buffer.
+ */
+async function readBoundedProviderBody(
+  response: Response,
+): Promise<BoundedProviderBody> {
+  if (response.body === null) {
+    return { state: "READ", bytesRead: 0, text: "" };
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytesRead = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      if (!(next.value instanceof Uint8Array)) {
+        throw new TypeError("Provider response stream returned invalid bytes");
+      }
+      bytesRead += next.value.byteLength;
+      if (!Number.isSafeInteger(bytesRead)) {
+        throw new RangeError("Provider response byte count is unsafe");
+      }
+      if (bytesRead > MAX_PROVIDER_BODY_BYTES) {
+        void reader.cancel().catch(() => undefined);
+        return { state: "OVERSIZED", bytesRead };
+      }
+      chunks.push(next.value);
+    }
+
+    const body = new Uint8Array(bytesRead);
+    let offset = 0;
+    for (const chunk of chunks) {
+      body.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return {
+      state: "READ",
+      bytesRead,
+      text: new TextDecoder("utf-8", { fatal: true }).decode(body),
+    };
+  } catch (error) {
+    void reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 /**
@@ -198,14 +289,29 @@ export class TmdbMovieIdentityResolver {
     }
   }
 
-  async resolve(subjectInput: MovieSubject): Promise<MovieIdentityResolution> {
+  async resolve(
+    subjectInput: MovieSubject,
+    signal?: AbortSignal,
+  ): Promise<MovieIdentityResolution> {
     const subject = MovieSubjectSchema.parse(subjectInput);
     const traceId = EntityIdSchema.parse(this.#createTraceId());
     const started = this.#now();
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.#timeoutMs);
+    let abortCause: "CALLER" | "TIMEOUT" | null = null;
+    const abort = (cause: "CALLER" | "TIMEOUT") => {
+      if (abortCause !== null) return;
+      abortCause = cause;
+      controller.abort();
+    };
+    const onCallerAbort = () => abort("CALLER");
+    if (callerAborted(signal)) {
+      throw boundedCallerAbort();
+    }
+    signal?.addEventListener("abort", onCallerAbort, { once: true });
+    const timeout = setTimeout(() => abort("TIMEOUT"), this.#timeoutMs);
     let httpStatus: number | null = null;
     let providerRequestId: string | null = null;
+    let outputBytes = 0;
 
     const attempt = () => {
       const completed = this.#now();
@@ -223,7 +329,22 @@ export class TmdbMovieIdentityResolver {
         latencyMs: Math.max(0, completed.getTime() - started.getTime()),
         httpStatus,
         providerRequestId,
-        estimatedCostUsd: 0,
+        telemetry: {
+          telemetryState: "COMPLETE",
+          providerRunId: providerRequestId,
+          usage: {
+            inputTokens: 0,
+            outputTokens: 0,
+            toolCalls: 1,
+            inputBytes: 0,
+            outputBytes,
+          },
+          cost: {
+            currency: "USD",
+            pricingState: "UNPRICED",
+            amountMicros: null,
+          },
+        },
         origin: { kind: "RESOLVER", actorId: null, version: RESOLVER_VERSION },
       });
     };
@@ -241,12 +362,17 @@ export class TmdbMovieIdentityResolver {
         signal: controller.signal,
         cache: "no-store",
       });
+      if (abortCause === "CALLER") throw boundedCallerAbort();
+      if (abortCause === "TIMEOUT") {
+        throw new DOMException("Movie identity request timed out", "AbortError");
+      }
       httpStatus = response.status;
       providerRequestId = safeProviderRequestId(
         response.headers.get("x-request-id"),
       );
 
       if (response.status === 404) {
+        cancelUnusedProviderBody(response);
         return MovieIdentityResolutionSchema.parse({
           state: "NOT_FOUND",
           providerRef: subject.providerRef,
@@ -255,6 +381,7 @@ export class TmdbMovieIdentityResolver {
       }
 
       if (response.status === 429) {
+        cancelUnusedProviderBody(response);
         return MovieIdentityResolutionSchema.parse({
           state: "RATE_LIMITED",
           providerRef: subject.providerRef,
@@ -267,6 +394,7 @@ export class TmdbMovieIdentityResolver {
       }
 
       if (response.status === 401 || response.status === 403) {
+        cancelUnusedProviderBody(response);
         return MovieIdentityResolutionSchema.parse({
           state: "UNAVAILABLE",
           providerRef: subject.providerRef,
@@ -277,6 +405,7 @@ export class TmdbMovieIdentityResolver {
       }
 
       if (response.status >= 500) {
+        cancelUnusedProviderBody(response);
         return MovieIdentityResolutionSchema.parse({
           state: "UNAVAILABLE",
           providerRef: subject.providerRef,
@@ -287,6 +416,7 @@ export class TmdbMovieIdentityResolver {
       }
 
       if (!response.ok) {
+        cancelUnusedProviderBody(response);
         return MovieIdentityResolutionSchema.parse({
           state: "UNAVAILABLE",
           providerRef: subject.providerRef,
@@ -298,8 +428,39 @@ export class TmdbMovieIdentityResolver {
 
       let providerBody: unknown;
       try {
-        providerBody = await response.json();
+        const declaredLength = Number(response.headers.get("content-length"));
+        if (
+          Number.isFinite(declaredLength) &&
+          declaredLength > MAX_PROVIDER_BODY_BYTES
+        ) {
+          cancelUnusedProviderBody(response);
+          return MovieIdentityResolutionSchema.parse({
+            state: "UNAVAILABLE",
+            providerRef: subject.providerRef,
+            reason: "INVALID_PROVIDER_RESPONSE",
+            retryable: false,
+            attempt: attempt(),
+          });
+        }
+        const boundedBody = await readBoundedProviderBody(response);
+        outputBytes = boundedBody.bytesRead;
+        if (boundedBody.state === "OVERSIZED") {
+          return MovieIdentityResolutionSchema.parse({
+            state: "UNAVAILABLE",
+            providerRef: subject.providerRef,
+            reason: "INVALID_PROVIDER_RESPONSE",
+            retryable: false,
+            attempt: attempt(),
+          });
+        }
+        providerBody = JSON.parse(boundedBody.text) as unknown;
       } catch {
+        if (abortCause === "CALLER" || callerAborted(signal)) {
+          throw boundedCallerAbort();
+        }
+        if (abortCause === "TIMEOUT") {
+          throw new DOMException("Movie identity request timed out", "AbortError");
+        }
         return MovieIdentityResolutionSchema.parse({
           state: "UNAVAILABLE",
           providerRef: subject.providerRef,
@@ -347,19 +508,20 @@ export class TmdbMovieIdentityResolver {
         identity,
         attempt: attempt(),
       });
-    } catch (error) {
-      const timedOut =
-        controller.signal.aborted ||
-        (error instanceof DOMException && error.name === "AbortError");
+    } catch {
+      if (abortCause === "CALLER" || callerAborted(signal)) {
+        throw boundedCallerAbort();
+      }
       return MovieIdentityResolutionSchema.parse({
         state: "UNAVAILABLE",
         providerRef: subject.providerRef,
-        reason: timedOut ? "REQUEST_TIMEOUT" : "NETWORK_ERROR",
+        reason: abortCause === "TIMEOUT" ? "REQUEST_TIMEOUT" : "NETWORK_ERROR",
         retryable: true,
         attempt: attempt(),
       });
     } finally {
       clearTimeout(timeout);
+      signal?.removeEventListener("abort", onCallerAbort);
     }
   }
 }

@@ -43,6 +43,9 @@ const CHECKPOINT_ID = "34000000-0000-4000-8000-000000000002";
 const REPLAYED_CHECKPOINT_ID = "34000000-0000-4000-8000-000000000003";
 const WORKER_ID = "worker-checkpoint-03";
 const SECRET = "private curiosity and provider body must never persist";
+const DB_REQUEST_FINGERPRINT = "c".repeat(64);
+const SUBJECT_REF_FINGERPRINT = "4".repeat(64);
+const INPUT_MANIFEST_FINGERPRINT = "e".repeat(64);
 
 const hash = (value: string) =>
   createHash("sha256").update(value).digest("hex");
@@ -126,7 +129,7 @@ function claimedWork(input: ClaimResearchJobInput): ClaimedResearchJob {
     runId: run.id,
     jobId: job.id,
     attemptNumber: 1,
-    requestFingerprint: input.requestFingerprint,
+    requestFingerprint: DB_REQUEST_FINGERPRINT,
     status: "RUNNING",
     execution: {
       executionKind: input.execution.executionKind,
@@ -173,9 +176,31 @@ function claimedWork(input: ClaimResearchJobInput): ClaimedResearchJob {
       claimedAt: T1,
       heartbeatAt: T1,
       expiresAt: T4,
-      externalIdempotencyKey: input.requestFingerprint,
+      externalIdempotencyKey: DB_REQUEST_FINGERPRINT,
     },
     execution: input.execution,
+    inputManifest: {
+      schemaVersion: 1,
+      authority: "POSTGRES",
+      manifest: {
+        schemaVersion: 1,
+        runId: run.id,
+        caseId: run.caseId,
+        branchId: run.branchId,
+        planId: run.planId,
+        jobId: job.id,
+        stage: job.stage,
+        subjectRefFingerprint: SUBJECT_REF_FINGERPRINT,
+        objectiveFingerprint: run.objectiveFingerprint,
+        runRequestFingerprint: run.requestFingerprint,
+        planFingerprint: BLACK_HAWK_DOWN_RESEARCH_BUNDLE.plan.planFingerprint,
+        stageSeedFingerprint: job.stageInputFingerprint,
+        dependency: { state: "ROOT" },
+        subjectIdentity: { state: "UNBOUND" },
+      },
+      manifestFingerprint: INPUT_MANIFEST_FINGERPRINT,
+      authoredAt: T1,
+    },
     latestCheckpoint: null,
     providerCheckpoint: null,
     resumed: false,
@@ -344,6 +369,9 @@ describe("durable research worker", () => {
       async execute(input) {
         store.calls.push("execute");
         expect(store.calls[0]).toBe("claim");
+        expect(input.actorId).toBe(
+          BLACK_HAWK_DOWN_RESEARCH_BUNDLE.run.caseId,
+        );
         expect(input.claim.attempt.status).toBe("RUNNING");
         expect(input.externalIdempotencyKey).toBe(
           input.claim.attempt.requestFingerprint,
@@ -361,7 +389,7 @@ describe("durable research worker", () => {
       command,
     );
 
-    expect(execution.disposition).toBe("SUCCEEDED");
+    expect(execution.disposition).toBe("DEGRADED");
     expect(store.calls).toEqual(["claim", "execute", "complete"]);
     expect(store.completeInput?.lease.attemptId).toBe(ATTEMPT_ID);
     expect(store.completeInput?.execution.latencyMs).toBe(60_000);
@@ -446,7 +474,7 @@ describe("durable research worker", () => {
       command,
     );
 
-    expect(execution.disposition).toBe("SUCCEEDED");
+    expect(execution.disposition).toBe("DEGRADED");
     expect(returnedCheckpointId).toBe(REPLAYED_CHECKPOINT_ID);
     expect(store.calls).toEqual(["claim", "checkpoint", "complete"]);
   });
@@ -568,6 +596,49 @@ describe("durable research worker", () => {
     expect(execution.disposition).toBe("FAILED_RETRYABLE");
     expect(store.failureInput?.failure.code).toBe("stage-output-invalid");
     expect(JSON.stringify(store.failureInput)).not.toContain(SECRET);
+  });
+
+  it("rejects an identity result that omits an authoritative plan requirement", async () => {
+    const store = new Store();
+    const executor: DurableResearchStageExecutor = {
+      identity: executorIdentity,
+      async execute() {
+        const result = blackHawkDownStageResult(
+          "IDENTITY",
+          ATTEMPT_ID,
+          T2,
+        );
+        if (result.output.kind !== "IDENTITY_RESULT") {
+          throw new Error("Fixture did not produce identity output");
+        }
+        return {
+          status: "COMPLETED",
+          result: {
+            ...result,
+            outcome: "SUCCEEDED",
+            boundedReasonCodes: [],
+            output: {
+              ...result.output,
+              unresolvedRequirementIds: [],
+            },
+          },
+          telemetry,
+        };
+      },
+    };
+
+    const execution = await service(store, executor)(
+      BLACK_HAWK_DOWN_RESEARCH_BUNDLE.run.caseId,
+      command,
+    );
+
+    expect(execution.disposition).toBe("FAILED_RETRYABLE");
+    expect(store.calls).toEqual(["claim", "fail"]);
+    expect(store.failureInput?.failure).toMatchObject({
+      code: "stage-output-invalid",
+      category: "INVALID_OUTPUT",
+      redactionState: "BODY_FREE",
+    });
   });
 
   it("refuses automatic retry when provider-start idempotency is not guaranteed", async () => {
@@ -883,7 +954,7 @@ describe("durable research worker", () => {
     );
 
     expect(handedOff.disposition).toBe("RELEASED");
-    expect(completed.disposition).toBe("SUCCEEDED");
+    expect(completed.disposition).toBe("DEGRADED");
     expect(store.releaseInput?.idempotencyKey).toBe(
       `${ATTEMPT_ID}:retry-handoff:1`,
     );

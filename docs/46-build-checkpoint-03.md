@@ -154,3 +154,6 @@ Checkpoint 04B can then compose multi-axis candidate discovery. Secure source
 and locator resolution, evidence/claim normalization, corroboration, and paced
 sequencing follow as separate gates. No factual beat becomes visible before
 those records and their provenance are atomically durable.
+
+Checkpoint 04A's implementation and current release status are recorded in
+`docs/47-build-checkpoint-04a.md`.

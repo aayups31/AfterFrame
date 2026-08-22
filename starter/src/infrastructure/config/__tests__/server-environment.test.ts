@@ -69,4 +69,14 @@ describe("server environment", () => {
       }),
     ).toThrow();
   });
+
+  it("rejects a pooler URI copied from a different Supabase project", () => {
+    expect(() =>
+      readAfterFrameServerEnvironment({
+        ...environment,
+        SUPABASE_DB_URL:
+          "postgresql://postgres.other-project:database-secret@session.pooler.supabase.com:5432/postgres",
+      }),
+    ).toThrow(/must belong to the same Supabase project/);
+  });
 });

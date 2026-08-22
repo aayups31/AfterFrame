@@ -103,7 +103,6 @@ const claimInput: ClaimResearchJobInput = {
   expectedRunVersion: 0,
   expectedJobVersion: 0,
   idempotencyKey: "identity-once",
-  requestFingerprint: HASH_C,
   attemptId: ATTEMPT_ID,
   workerId: "worker-checkpoint-03",
   execution: executionPlan,
@@ -169,13 +168,13 @@ describe("Supabase durable research worker store", () => {
       parameters: Record<string, unknown>;
     }> = [];
     const responses: Record<string, unknown> = {
-      af_claim_research_job_v1: {
+      af_claim_research_job_v2: {
         status: "IN_PROGRESS",
         retryAfterMs: 500,
       },
       af_heartbeat_research_job_v1: { status: "CANCELLED" },
       af_checkpoint_research_job_v1: { status: "LEASE_LOST" },
-      af_complete_research_job_v1: { status: "CANCELLED" },
+      af_complete_research_job_v2: { status: "CANCELLED" },
       af_fail_research_job_v1: { status: "LEASE_LOST" },
       af_release_research_job_v1: { status: "CANCELLED" },
     };
@@ -196,10 +195,10 @@ describe("Supabase durable research worker store", () => {
     await store.releaseResearchJob(releaseInput);
 
     expect(calls.map(({ name }) => name)).toEqual([
-      "af_claim_research_job_v1",
+      "af_claim_research_job_v2",
       "af_heartbeat_research_job_v1",
       "af_checkpoint_research_job_v1",
-      "af_complete_research_job_v1",
+      "af_complete_research_job_v2",
       "af_fail_research_job_v1",
       "af_release_research_job_v1",
     ]);
@@ -211,7 +210,6 @@ describe("Supabase durable research worker store", () => {
       p_expected_run_version: 0,
       p_expected_job_version: 0,
       p_idempotency_key: "identity-once",
-      p_request_fingerprint: HASH_C,
       p_attempt_id: ATTEMPT_ID,
       p_worker_id: "worker-checkpoint-03",
       p_execution: executionPlan,

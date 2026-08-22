@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SpecialistSubjectRefSchema } from "@/core/cases/schemas";
+import { SpecialistResearchPlanSchema } from "@/core/ports/investigation-specialist";
 import { movieInvestigationSpecialist } from "@/specialists/movie/manifest";
 
 function validatedSubject(id: string, versionId: string | null = null) {
@@ -188,5 +189,35 @@ describe("Movie Investigator source judgment", () => {
     expect(plan.coverageGaps).toEqual([
       "TMDB film identity has not been provider-resolved",
     ]);
+  });
+
+  it("rejects duplicate identity requirements before a plan can be persisted", () => {
+    const plan = movieInvestigationSpecialist.planResearch({
+      subject: validatedSubject("tmdb:movie:603"),
+      question: "How did production choices shape the film's visual form?",
+    });
+    const firstRequirement = plan.identityRequirements[0];
+    if (firstRequirement === undefined) {
+      throw new Error("Movie research plan requires identity requirements");
+    }
+
+    expect(
+      SpecialistResearchPlanSchema.safeParse({
+        ...plan,
+        identityRequirements: [
+          ...plan.identityRequirements,
+          firstRequirement,
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      SpecialistResearchPlanSchema.safeParse({
+        ...plan,
+        identityRequirements: Array.from({ length: 51 }, (_, index) => ({
+          ...firstRequirement,
+          id: `requirement-${index}`,
+        })),
+      }).success,
+    ).toBe(false);
   });
 });

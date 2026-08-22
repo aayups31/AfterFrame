@@ -5,6 +5,7 @@ import {
   RightsStateSchema,
   SourceMediumSchema,
 } from "@/core/research/schemas";
+import { ResolvedSubjectIdentityRecordSchema } from "@/core/research/subject-identity";
 import {
   EntityIdSchema,
   HttpUrlSchema,
@@ -667,10 +668,43 @@ export const IdentityStageOutputSchema = z
     ...researchOutputBase,
     kind: z.literal("IDENTITY_RESULT"),
     stage: z.literal("IDENTITY"),
+    subjectIdentityId: EntityIdSchema,
     resolvedRequirementIds: z.array(SlugSchema).max(50),
     unresolvedRequirementIds: z.array(SlugSchema).max(50),
   })
-  .strict();
+  .strict()
+  .superRefine((output, context) => {
+    const resolvedIds = new Set<string>();
+    output.resolvedRequirementIds.forEach((requirementId, index) => {
+      if (resolvedIds.has(requirementId)) {
+        context.addIssue({
+          code: "custom",
+          path: ["resolvedRequirementIds", index],
+          message: "Resolved identity requirement IDs must be unique",
+        });
+      }
+      resolvedIds.add(requirementId);
+    });
+    const unresolvedIds = new Set<string>();
+    output.unresolvedRequirementIds.forEach((requirementId, index) => {
+      if (unresolvedIds.has(requirementId)) {
+        context.addIssue({
+          code: "custom",
+          path: ["unresolvedRequirementIds", index],
+          message: "Unresolved identity requirement IDs must be unique",
+        });
+      }
+      if (resolvedIds.has(requirementId)) {
+        context.addIssue({
+          code: "custom",
+          path: ["unresolvedRequirementIds", index],
+          message:
+            "An identity requirement cannot be both resolved and unresolved",
+        });
+      }
+      unresolvedIds.add(requirementId);
+    });
+  });
 
 export const ScopingStageOutputSchema = z
   .object({
@@ -751,6 +785,7 @@ export const ResearchStageExecutionResultSchema = z
     outcome: z.enum(["SUCCEEDED", "DEGRADED"]),
     boundedReasonCodes: z.array(SlugSchema).max(20),
     output: ResearchStageOutputSchema,
+    subjectIdentities: z.array(ResolvedSubjectIdentityRecordSchema).max(1),
     sourceCandidates: z.array(SourceCandidateRecordSchema).max(500),
     untrustedContent: z
       .array(UntrustedResearchContentRecordSchema)
@@ -784,6 +819,46 @@ export const ResearchStageExecutionResultSchema = z
         code: "custom",
         path: ["output", "provenanceInputs"],
         message: "Stage outputs require job and attempt provenance",
+      });
+    }
+    if (output.stage === "IDENTITY") {
+      const identity = result.subjectIdentities[0];
+      if (
+        result.subjectIdentities.length !== 1 ||
+        identity === undefined ||
+        identity.id !== output.subjectIdentityId ||
+        identity.runId !== output.runId ||
+        identity.jobId !== output.jobId ||
+        identity.attemptId !== output.attemptId
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["subjectIdentities"],
+          message:
+            "IDENTITY results require exactly the durable subject identity referenced by their output",
+        });
+      }
+      const hasUnresolvedRequirements =
+        output.unresolvedRequirementIds.length > 0;
+      if (
+        (result.outcome === "DEGRADED") !== hasUnresolvedRequirements ||
+        (hasUnresolvedRequirements &&
+          (result.boundedReasonCodes.length !== 1 ||
+            result.boundedReasonCodes[0] !==
+              "identity-requirements-unresolved"))
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["outcome"],
+          message:
+            "Identity outcome must truthfully reflect unresolved specialist requirements",
+        });
+      }
+    } else if (result.subjectIdentities.length > 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["subjectIdentities"],
+        message: "Only the IDENTITY stage may create a subject identity",
       });
     }
     for (const [collectionName, records] of [
@@ -843,6 +918,7 @@ export const ResearchRunBundleSchema = z
     jobs: z.array(ResearchJobRecordSchema).length(RESEARCH_STAGES.length),
     attempts: z.array(ResearchAttemptRecordSchema),
     outputs: z.array(ResearchStageOutputSchema),
+    subjectIdentities: z.array(ResolvedSubjectIdentityRecordSchema).max(1),
     sourceCandidates: z.array(SourceCandidateRecordSchema),
     untrustedContent: z.array(UntrustedResearchContentRecordSchema),
   })
@@ -957,14 +1033,109 @@ export const ResearchRunBundleSchema = z
         });
       }
     };
+    const seenOutputAttemptIds = new Set<string>();
     bundle.outputs.forEach((output, index) => {
       validateProducedRecord(output, ["outputs", index]);
+      if (seenOutputAttemptIds.has(output.attemptId)) {
+        context.addIssue({
+          code: "custom",
+          path: ["outputs", index, "attemptId"],
+          message: "An attempt may persist exactly one stage output",
+        });
+      }
+      seenOutputAttemptIds.add(output.attemptId);
+      const attempt = bundle.attempts.find(({ id }) => id === output.attemptId);
+      if (
+        attempt !== undefined &&
+        attempt.status !== "SUCCEEDED" &&
+        attempt.status !== "DEGRADED"
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["outputs", index, "attemptId"],
+          message:
+            "A persisted stage output requires a SUCCEEDED or DEGRADED attempt",
+        });
+      }
       const job = jobById.get(output.jobId);
       if (job !== undefined && output.stage !== job.stage) {
         context.addIssue({
           code: "custom",
           path: ["outputs", index, "stage"],
           message: "Output stage must match its job stage",
+        });
+      }
+      if (
+        output.kind === "IDENTITY_RESULT" &&
+        !bundle.subjectIdentities.some(
+          (identity) =>
+            identity.id === output.subjectIdentityId &&
+            identity.runId === output.runId &&
+            identity.jobId === output.jobId &&
+            identity.attemptId === output.attemptId,
+        )
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["outputs", index, "subjectIdentityId"],
+          message:
+            "IDENTITY outputs require their matching durable subject identity",
+        });
+      }
+    });
+    bundle.attempts.forEach((attempt, index) => {
+      if (
+        (attempt.status === "SUCCEEDED" || attempt.status === "DEGRADED") &&
+        !seenOutputAttemptIds.has(attempt.id)
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["attempts", index, "status"],
+          message:
+            "Every SUCCEEDED or DEGRADED attempt requires exactly one stage output",
+        });
+      }
+    });
+    const seenSubjectIdentityIds = new Set<string>();
+    bundle.subjectIdentities.forEach((identity, index) => {
+      validateProducedRecord(identity, ["subjectIdentities", index]);
+      if (
+        identity.caseId !== bundle.run.caseId ||
+        seenSubjectIdentityIds.has(identity.id)
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["subjectIdentities", index],
+          message:
+            "Subject identities must be unique and belong to the investigation case",
+        });
+      }
+      seenSubjectIdentityIds.add(identity.id);
+      const job = jobById.get(identity.jobId);
+      if (job !== undefined && job.stage !== "IDENTITY") {
+        context.addIssue({
+          code: "custom",
+          path: ["subjectIdentities", index, "jobId"],
+          message: "Subject identities must originate in IDENTITY",
+        });
+      }
+      const output = bundle.outputs.find(
+        (candidate): candidate is z.infer<typeof IdentityStageOutputSchema> =>
+          candidate.kind === "IDENTITY_RESULT" &&
+          candidate.subjectIdentityId === identity.id,
+      );
+      if (
+        output === undefined ||
+        output.subjectIdentityId !== identity.id ||
+        output.runId !== identity.runId ||
+        output.jobId !== identity.jobId ||
+        output.attemptId !== identity.attemptId
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["subjectIdentities", index],
+          message:
+            "A durable subject identity requires its matching IDENTITY stage output",
         });
       }
     });

@@ -138,7 +138,6 @@ export type ClaimResearchJobInput = Readonly<{
   expectedRunVersion: number;
   expectedJobVersion: number;
   idempotencyKey: string;
-  requestFingerprint: string;
   attemptId: string;
   workerId: string;
   execution: ResearchWorkerExecutionPlan;
@@ -207,6 +206,7 @@ export interface DurableResearchWorkerStore {
 }
 
 export type DurableResearchStageExecutionInput = Readonly<{
+  actorId: string;
   claim: ClaimedResearchJob;
   /** Must be forwarded to providers that support request idempotency. */
   externalIdempotencyKey: string;

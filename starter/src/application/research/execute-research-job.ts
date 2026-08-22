@@ -376,6 +376,10 @@ export function createExecuteResearchJobService(
         jobs: replaceJob(runningBundle, completedJob),
         attempts,
         outputs: [...runningBundle.outputs, result.output],
+        subjectIdentities: [
+          ...runningBundle.subjectIdentities,
+          ...result.subjectIdentities,
+        ],
         sourceCandidates: [
           ...runningBundle.sourceCandidates,
           ...result.sourceCandidates,

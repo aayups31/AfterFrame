@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { ResolvedPublicSubjectIdentitySchema } from "@/application/research/discovery-port";
+import { ResolvedPublicSubjectIdentitySchema } from "@/core/research/subject-identity";
 import {
   MovieIdentityMetadataSchema,
   type MovieIdentityMetadata,

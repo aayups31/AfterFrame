@@ -1,6 +1,37 @@
 import { z } from "zod";
 
 const NonEmptySecretSchema = z.string().min(1);
+
+function projectReferenceFromSupabaseUrl(value: string) {
+  try {
+    const match = new URL(value).hostname.match(
+      /^([a-z0-9]+)\.supabase\.co$/,
+    );
+    return match?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function projectReferenceFromDatabaseUrl(value: string) {
+  try {
+    const parsed = new URL(value);
+    const directHost = parsed.hostname.match(
+      /^db\.([a-z0-9]+)\.supabase\.co$/,
+    );
+    if (directHost?.[1] !== undefined) return directHost[1];
+    if (parsed.hostname.endsWith(".pooler.supabase.com")) {
+      const username = decodeURIComponent(parsed.username);
+      return username.startsWith("postgres.")
+        ? username.slice("postgres.".length)
+        : null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 const PostgresConnectionStringSchema = z
   .string()
   .min(1)
@@ -46,7 +77,27 @@ export const AfterFrameServerEnvironmentSchema = z
       .default("fixture"),
     OPENAI_RESEARCH_MODEL: z.string().trim().min(1).default("gpt-5.6-sol"),
   })
-  .strict();
+  .strict()
+  .superRefine((environment, context) => {
+    const publicProjectRef = projectReferenceFromSupabaseUrl(
+      environment.NEXT_PUBLIC_SUPABASE_URL,
+    );
+    const databaseProjectRef = projectReferenceFromDatabaseUrl(
+      environment.SUPABASE_DB_URL,
+    );
+    if (
+      publicProjectRef !== null &&
+      databaseProjectRef !== null &&
+      publicProjectRef !== databaseProjectRef
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["SUPABASE_DB_URL"],
+        message:
+          "SUPABASE_DB_URL and NEXT_PUBLIC_SUPABASE_URL must belong to the same Supabase project",
+      });
+    }
+  });
 
 export type AfterFrameServerEnvironment = z.infer<
   typeof AfterFrameServerEnvironmentSchema
