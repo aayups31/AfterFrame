@@ -5,6 +5,7 @@ import {
   afterFrameV1ScopingExecutionPlan,
   afterFrameV1DiscoveryExecutionPlan,
   createAfterFrameV1ResearchExecutorRegistry,
+  createAfterFrameV1ShadowResearchExecutorRegistry,
 } from "@/infrastructure/research/afterframe-v1-research-executor-registry";
 
 const ACTOR_ID = "74000000-0000-4000-8000-000000000001";
@@ -58,5 +59,52 @@ describe("AfterFrame V1 durable executor composition", () => {
     expect(JSON.stringify(identity)).not.toContain("private-tmdb-key");
     expect(JSON.stringify(scoping)).not.toContain("private-tmdb-key");
     expect(invokeRpc).not.toHaveBeenCalled();
+  });
+
+  it("registers DISCOVERY only through the attested shadow composition", () => {
+    const invokeRpc = vi.fn(async () => ({ data: null, error: null }));
+    const registry = createAfterFrameV1ShadowResearchExecutorRegistry({
+      actorId: ACTOR_ID,
+      invokeRpc,
+      tmdbApiKey: "private-tmdb-key",
+      openAiApiKey: "private-openai-key",
+      requestedModel: "gpt-5.6-sol",
+      expectedProviderSnapshot: "gpt-5.6-sol",
+      dataControlAttestation: {
+        mode: "MODIFIED_ABUSE_MONITORING",
+        projectIdFingerprint:
+          "a".repeat(64),
+        attestedAt: "2026-08-22T18:00:00.000Z",
+        attestedBy: "deployment-owner",
+      },
+    });
+
+    expect(registry.resolve("DISCOVERY")?.identity).toEqual({
+      stage: "DISCOVERY",
+      execution: afterFrameV1DiscoveryExecutionPlan(
+        "gpt-5.6-sol",
+        "gpt-5.6-sol",
+      ),
+    });
+    expect(invokeRpc).not.toHaveBeenCalled();
+  });
+
+  it("rejects shadow composition without a valid MAM attestation", () => {
+    expect(() =>
+      createAfterFrameV1ShadowResearchExecutorRegistry({
+        actorId: ACTOR_ID,
+        invokeRpc: vi.fn(async () => ({ data: null, error: null })),
+        tmdbApiKey: "private-tmdb-key",
+        openAiApiKey: "private-openai-key",
+        requestedModel: "gpt-5.6-sol",
+        expectedProviderSnapshot: "gpt-5.6-sol",
+        dataControlAttestation: {
+          mode: "DEFAULT",
+          projectIdFingerprint: "a".repeat(64),
+          attestedAt: "2026-08-22T18:00:00.000Z",
+          attestedBy: "deployment-owner",
+        } as never,
+      }),
+    ).toThrow();
   });
 });

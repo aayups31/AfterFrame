@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createIdentityResearchStageExecutor } from "@/application/research-worker/executors/identity-research-stage-executor";
 import { createScopingResearchStageExecutor } from "@/application/research-worker/executors/scoping-research-stage-executor";
+import { DiscoveryResearchStageExecutor } from "@/application/research-worker/executors/discovery-research-stage-executor";
+import type { DurableResearchDiscoveryProvider } from "@/application/research/durable-discovery-port";
 import type {
   DurableResearchStageExecutor,
   DurableResearchStageExecutorRegistry,
@@ -8,8 +10,15 @@ import type {
 import { ResearchWorkerExecutionPlanSchema } from "@/core/research-runs/worker-schemas";
 import type { SupabaseRpcInvoker } from "@/infrastructure/persistence/supabase-investigation-store";
 import { SupabaseResearchIdentityReader } from "@/infrastructure/persistence/supabase-research-identity-reader";
+import { SupabaseResearchDiscoveryContextReader } from "@/infrastructure/persistence/supabase-research-discovery-context-reader";
+import { SupabaseResearchProviderRunReader } from "@/infrastructure/persistence/supabase-research-provider-run-reader";
 import { TmdbSubjectIdentityResolver } from "@/specialists/movie/infrastructure/tmdb-subject-identity-resolver";
-import { openAIBackgroundDiscoveryExecutionIdentity } from "@/infrastructure/research/openai-background-discovery";
+import {
+  createOpenAIBackgroundResearchDiscoveryProvider,
+  openAIBackgroundDiscoveryExecutionIdentity,
+  type OpenAIBackgroundDiscoveryOptions,
+} from "@/infrastructure/research/openai-background-discovery";
+import { Sha256ResearchRunFingerprintAdapter } from "@/infrastructure/research/research-run-fingerprints";
 
 const DEFAULT_TMDB_TIMEOUT_MS = 10_000;
 
@@ -109,18 +118,22 @@ export class AfterFrameV1ResearchExecutorRegistry
 {
   readonly #identityExecutor: DurableResearchStageExecutor;
   readonly #scopingExecutor: DurableResearchStageExecutor;
+  readonly #discoveryExecutor: DurableResearchStageExecutor | null;
 
   constructor(
     identityExecutor: DurableResearchStageExecutor,
     scopingExecutor: DurableResearchStageExecutor,
+    discoveryExecutor: DurableResearchStageExecutor | null = null,
   ) {
     this.#identityExecutor = identityExecutor;
     this.#scopingExecutor = scopingExecutor;
+    this.#discoveryExecutor = discoveryExecutor;
   }
 
   resolve(stage: Parameters<DurableResearchStageExecutorRegistry["resolve"]>[0]) {
     if (stage === "IDENTITY") return this.#identityExecutor;
     if (stage === "SCOPING") return this.#scopingExecutor;
+    if (stage === "DISCOVERY") return this.#discoveryExecutor;
     return null;
   }
 }
@@ -133,6 +146,14 @@ export type AfterFrameV1ResearchExecutorRegistryOptions = Readonly<{
   resolverTimeoutMs?: number;
   now?: () => Date;
   createId?: () => string;
+  discovery?: Readonly<{
+    provider: DurableResearchDiscoveryProvider;
+    requestedModel: string;
+    expectedProviderSnapshot: string;
+    pollIntervalMs?: number;
+    maxPollsPerExecution?: number;
+    delay?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
+  }>;
 }>;
 
 /**
@@ -170,8 +191,92 @@ export function createAfterFrameV1ResearchExecutorRegistry(
   const scopingExecutor = createScopingResearchStageExecutor({
     execution: afterFrameV1ScopingExecutionPlan(),
   });
+  const discoveryExecutor =
+    options.discovery === undefined
+      ? null
+      : new DiscoveryResearchStageExecutor({
+          context: new SupabaseResearchDiscoveryContextReader({
+            actorId: options.actorId,
+            invokeRpc: options.invokeRpc,
+          }),
+          providerRuns: new SupabaseResearchProviderRunReader({
+            actorId: options.actorId,
+            invokeRpc: options.invokeRpc,
+          }),
+          provider: options.discovery.provider,
+          fingerprints: new Sha256ResearchRunFingerprintAdapter(),
+          execution: afterFrameV1DiscoveryExecutionPlan(
+            options.discovery.requestedModel,
+            options.discovery.expectedProviderSnapshot,
+          ),
+          now: () => now().toISOString(),
+          ...(options.discovery.pollIntervalMs === undefined
+            ? {}
+            : { pollIntervalMs: options.discovery.pollIntervalMs }),
+          ...(options.discovery.maxPollsPerExecution === undefined
+            ? {}
+            : { maxPollsPerExecution: options.discovery.maxPollsPerExecution }),
+          ...(options.discovery.delay === undefined
+            ? {}
+            : { delay: options.discovery.delay }),
+        });
   return new AfterFrameV1ResearchExecutorRegistry(
     identityExecutor,
     scopingExecutor,
+    discoveryExecutor,
   );
+}
+
+export type AfterFrameV1ShadowResearchExecutorRegistryOptions = Omit<
+  AfterFrameV1ResearchExecutorRegistryOptions,
+  "discovery"
+> &
+  Readonly<{
+    openAiApiKey: string;
+    requestedModel: string;
+    expectedProviderSnapshot: string;
+    dataControlAttestation: OpenAIBackgroundDiscoveryOptions["dataControlAttestation"];
+    reasoningEffort?: "medium" | "high" | "xhigh";
+    pollIntervalMs?: number;
+    maxPollsPerExecution?: number;
+  }>;
+
+/**
+ * The only production-oriented V1 composition that registers DISCOVERY. Its
+ * provider constructor validates the explicit MAM attestation before any
+ * executor can be resolved or any paid request can be attempted.
+ */
+export function createAfterFrameV1ShadowResearchExecutorRegistry(
+  options: AfterFrameV1ShadowResearchExecutorRegistryOptions,
+) {
+  const provider = createOpenAIBackgroundResearchDiscoveryProvider({
+    apiKey: options.openAiApiKey,
+    model: options.requestedModel,
+    dataControlAttestation: options.dataControlAttestation,
+    ...(options.reasoningEffort === undefined
+      ? {}
+      : { reasoningEffort: options.reasoningEffort }),
+  });
+  return createAfterFrameV1ResearchExecutorRegistry({
+    actorId: options.actorId,
+    invokeRpc: options.invokeRpc,
+    tmdbApiKey: options.tmdbApiKey,
+    ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
+    ...(options.resolverTimeoutMs === undefined
+      ? {}
+      : { resolverTimeoutMs: options.resolverTimeoutMs }),
+    ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.createId === undefined ? {} : { createId: options.createId }),
+    discovery: {
+      provider,
+      requestedModel: options.requestedModel,
+      expectedProviderSnapshot: options.expectedProviderSnapshot,
+      ...(options.pollIntervalMs === undefined
+        ? {}
+        : { pollIntervalMs: options.pollIntervalMs }),
+      ...(options.maxPollsPerExecution === undefined
+        ? {}
+        : { maxPollsPerExecution: options.maxPollsPerExecution }),
+    },
+  });
 }

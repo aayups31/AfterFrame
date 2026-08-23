@@ -7,7 +7,7 @@ AFTERFRAME begins with the world's best Movie Investigator and is architected to
 
 ## Read this first
 
-Start with `START_HERE.md`, then `WHY.md`, then the canonical plan in `docs/23-final-build-plan.md`. The completed identity cutover is recorded in `docs/47-build-checkpoint-04a.md`; active Checkpoint 04B work is recorded in `docs/48-build-checkpoint-04b.md`.
+Start with `START_HERE.md`, then `WHY.md`, then the canonical plan in `docs/23-final-build-plan.md`. The completed identity cutover is recorded in `docs/47-build-checkpoint-04a.md`; active Checkpoint 04B work begins in `docs/48-build-checkpoint-04b.md` and its latest completed slice is `docs/56-build-checkpoint-04b-attested-discovery-composition.md`.
 
 The prototypes, starter UI, diagrams, and visual specifications are non-authoritative vision artifacts. They are useful for atmosphere and hypotheses, but production should not copy their interface or let their feature set define scope.
 
@@ -68,7 +68,7 @@ npm run dev
 
 Visit `http://localhost:3000`.
 
-The starter UI remains a non-binding mock. Checkpoint 03 deployed authenticated Postgres persistence and proved the durable worker lifecycle. Checkpoint 04A now deploys the first concrete durable `IDENTITY` executor boundary, resolver-verified public movie identity, and Postgres-authored causal manifests through migration 008. Its real Supabase/TMDB lifecycle passes through the causally bound `SCOPING` claim and rolls all test records back. The public production research route remains disabled until discovery, source/locator resolution, evidence and claim persistence, corroboration, sequencing, provenance, and domain eval gates pass.
+The starter UI remains a non-binding mock. Migrations 001–011 and the authenticated Postgres worker lifecycle are deployed. The real Supabase/TMDB path completes resolver-verified `IDENTITY`, deterministic `SCOPING`, and the causal handoff to `DISCOVERY`. A resumable discovery executor and its fail-closed, MAM-attested shadow composition now exist, but the current environment does not claim MAM and no paid live call is enabled. The next gate is the deterministic full Postgres discovery lifecycle; the public production research route remains disabled until candidate resolution, evidence and claim persistence, corroboration, sequencing, provenance, and domain eval gates pass.
 
 ### 3. Start Codex with GPT-5.6 Sol
 
