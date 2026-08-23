@@ -19,6 +19,7 @@
     "test:migration:008:predeploy": "AFTERFRAME_DB_MIGRATION_PREFLIGHT=1 vitest run src/infrastructure/persistence/__tests__/checkpoint-04a-migration-predeploy.integration.test.ts",
     "test:migration:009:predeploy": "AFTERFRAME_DB_MIGRATION_009_PREFLIGHT=1 vitest run src/infrastructure/persistence/__tests__/checkpoint-04b-migration-predeploy.integration.test.ts",
     "test:migration:010:predeploy": "AFTERFRAME_DB_MIGRATION_010_PREFLIGHT=1 vitest run src/infrastructure/persistence/__tests__/checkpoint-04b-takeover-reader-predeploy.integration.test.ts",
+    "test:migration:011:predeploy": "AFTERFRAME_DB_MIGRATION_011_PREFLIGHT=1 vitest run src/infrastructure/persistence/__tests__/checkpoint-04b-terminal-acceptance-predeploy.integration.test.ts",
     "check": "npm run typecheck && npm run lint && npm run test && npm run build"
   },
   "dependencies": {

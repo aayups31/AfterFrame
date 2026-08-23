@@ -316,7 +316,14 @@ export function providerRunRecordFromAcceptedHandle(
     handle.binding.caseId !== input.caseId ||
     handle.binding.manifestFingerprint !== input.manifestFingerprint ||
     handle.binding.externalIdempotencyKey !== input.externalIdempotencyKey ||
-    !["QUEUED", "IN_PROGRESS"].includes(handle.state)
+    ![
+      "QUEUED",
+      "IN_PROGRESS",
+      "COMPLETED",
+      "FAILED",
+      "INCOMPLETE",
+      "CANCELLED",
+    ].includes(handle.state)
   ) {
     throw new z.ZodError([
       {

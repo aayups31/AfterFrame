@@ -207,7 +207,7 @@ describe("durable multi-axis discovery boundary", () => {
     expect(JSON.stringify(record)).not.toContain(input.exactQuestion);
   });
 
-  it("rejects a provider handle from another attempt or terminal response", () => {
+  it("rejects a provider handle from another attempt", () => {
     const baseHandle = {
       providerResponseId: "resp_durable_discovery_1",
       state: "QUEUED",
@@ -242,12 +242,42 @@ describe("durable multi-axis discovery boundary", () => {
         "2026-08-22T20:00:02.000Z",
       ),
     ).toThrow(/exact discovery attempt/);
-    expect(() =>
-      providerRunRecordFromAcceptedHandle(
-        input,
-        { ...baseHandle, state: "COMPLETED" },
-        "2026-08-22T20:00:02.000Z",
-      ),
-    ).toThrow(/exact discovery attempt/);
   });
+
+  it.each(["COMPLETED", "FAILED", "INCOMPLETE", "CANCELLED"] as const)(
+    "retains a synchronously terminal %s response for exact recovery",
+    (state) => {
+      const record = providerRunRecordFromAcceptedHandle(
+        input,
+        {
+          providerResponseId: `resp_terminal_${state.toLowerCase()}`,
+          state,
+          requestedModel: "gpt-test",
+          providerModel: "gpt-test",
+          traceId: "trace-terminal-discovery-1",
+          binding: {
+            runId: input.runId,
+            jobId: input.jobId,
+            attemptId: input.attemptId,
+            caseId: input.caseId,
+            manifestFingerprint: input.manifestFingerprint,
+            externalIdempotencyKey: input.externalIdempotencyKey,
+          },
+          startedAt: "2026-08-22T20:00:00.000Z",
+          lastObservedAt: "2026-08-22T20:00:01.000Z",
+          inputBytes: 2_000,
+          dataControlMode: "MODIFIED_ABUSE_MONITORING",
+          projectIdFingerprint: "f".repeat(64),
+          privateContentIncluded: true,
+        },
+        "2026-08-22T20:00:02.000Z",
+      );
+
+      expect(record.state).toBe(state);
+      expect(record.providerResponseId).toBe(
+        `resp_terminal_${state.toLowerCase()}`,
+      );
+      expect(JSON.stringify(record)).not.toContain(input.exactQuestion);
+    },
+  );
 });
