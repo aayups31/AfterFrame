@@ -14,6 +14,7 @@ import {
 import {
   EntityIdSchema,
   HttpUrlSchema,
+  IsoDateTimeSchema,
   OpaqueReferenceSchema,
   Sha256Schema,
   SlugSchema,
@@ -39,7 +40,36 @@ export const DurableResearchDiscoveryContextSchema = z
     axes: z.array(SpecialistResearchAxisPlanSchema).min(1).max(30),
     sourceClassIds: z.array(SlugSchema).min(1).max(30),
   })
-  .strict();
+  .strict()
+  .superRefine((input, context) => {
+    const axisIds = new Set(input.axes.map(({ axisId }) => axisId));
+    const sourceClassIds = new Set(input.sourceClassIds);
+    const selectedSourceClasses = new Set(
+      input.axes.flatMap(({ sourceClassIds: selected }) => selected),
+    );
+    if (
+      axisIds.size !== input.axes.length ||
+      sourceClassIds.size !== input.sourceClassIds.length ||
+      input.axes.some(
+        (axis) =>
+          new Set(axis.sourceClassIds).size !== axis.sourceClassIds.length ||
+          axis.sourceClassIds.some(
+            (sourceClassId) => !sourceClassIds.has(sourceClassId),
+          ),
+      ) ||
+      selectedSourceClasses.size !== sourceClassIds.size ||
+      [...selectedSourceClasses].some(
+        (sourceClassId) => !sourceClassIds.has(sourceClassId),
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["axes"],
+        message:
+          "Discovery context must uniquely and exactly cover its pinned axes and source classes",
+      });
+    }
+  });
 
 export const DurableResearchDiscoveryInputSchema = z
   .object({
@@ -213,10 +243,181 @@ export type DurableResearchDiscoveryOutput = z.infer<
   typeof DurableResearchDiscoveryOutputSchema
 >;
 
+export const DurableResearchDiscoveryHandleSchema = z
+  .object({
+    providerResponseId: OpaqueReferenceSchema,
+    state: z.enum(["QUEUED", "IN_PROGRESS", "COMPLETED", "FAILED", "INCOMPLETE", "CANCELLED"]),
+    requestedModel: z.string().trim().min(1).max(200),
+    providerModel: z.string().trim().min(1).max(200),
+    traceId: OpaqueReferenceSchema,
+    binding: z
+      .object({
+        runId: EntityIdSchema,
+        jobId: EntityIdSchema,
+        attemptId: EntityIdSchema,
+        caseId: EntityIdSchema,
+        manifestFingerprint: Sha256Schema,
+        externalIdempotencyKey: Sha256Schema,
+      })
+      .strict(),
+    startedAt: IsoDateTimeSchema,
+    lastObservedAt: IsoDateTimeSchema,
+    inputBytes: z.number().int().nonnegative(),
+    dataControlMode: z.literal("MODIFIED_ABUSE_MONITORING"),
+    projectIdFingerprint: Sha256Schema,
+    privateContentIncluded: z.literal(true),
+  })
+  .strict();
+
+export const DurableResearchDiscoveryFailureSchema = z
+  .object({
+    providerResponseId: OpaqueReferenceSchema,
+    state: z.enum(["FAILED", "INCOMPLETE", "CANCELLED"]),
+    reasonCode: z.enum(["provider-failed", "provider-incomplete", "provider-cancelled"]),
+    providerReasonCode: SlugSchema.nullable(),
+    requestedModel: z.string().trim().min(1).max(200),
+    providerModel: z.string().trim().min(1).max(200),
+    traceId: OpaqueReferenceSchema,
+    startedAt: IsoDateTimeSchema,
+    observedAt: IsoDateTimeSchema,
+    latencyMs: z.number().int().nonnegative(),
+    usage: z
+      .object({
+        inputTokens: z.number().int().nonnegative(),
+        outputTokens: z.number().int().nonnegative(),
+        totalTokens: z.number().int().nonnegative(),
+      })
+      .strict()
+      .nullable(),
+    privateContentIncluded: z.literal(true),
+  })
+  .strict();
+
+/**
+ * Body-free durable recovery state. Persisting only providerResponseId would
+ * make trace, model, timing, and data-control metadata unknowable after a
+ * worker crash, so the accepted handle is normalized into this exact record.
+ */
+export const DurableResearchProviderRunRecordSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    runId: EntityIdSchema,
+    jobId: EntityIdSchema,
+    attemptId: EntityIdSchema,
+    caseId: EntityIdSchema,
+    provider: z.literal("openai"),
+    providerResponseId: OpaqueReferenceSchema,
+    state: z.enum(["QUEUED", "IN_PROGRESS"]),
+    requestedModel: z.string().trim().min(1).max(200),
+    providerModel: z.string().trim().min(1).max(200),
+    traceId: OpaqueReferenceSchema,
+    manifestFingerprint: Sha256Schema,
+    externalIdempotencyKey: Sha256Schema,
+    startedAt: IsoDateTimeSchema,
+    acceptedAt: IsoDateTimeSchema,
+    lastObservedAt: IsoDateTimeSchema,
+    inputBytes: z.number().int().nonnegative(),
+    dataControlMode: z.literal("MODIFIED_ABUSE_MONITORING"),
+    projectIdFingerprint: Sha256Schema,
+    privateContentIncluded: z.literal(true),
+    publicationAuthority: NoPublicationAuthoritySchema,
+  })
+  .strict()
+  .superRefine((record, context) => {
+    const startedAt = new Date(record.startedAt).getTime();
+    const acceptedAt = new Date(record.acceptedAt).getTime();
+    const observedAt = new Date(record.lastObservedAt).getTime();
+    if (acceptedAt < startedAt || observedAt < startedAt) {
+      context.addIssue({
+        code: "custom",
+        path: ["acceptedAt"],
+        message: "Provider acceptance and observation cannot precede provider start",
+      });
+    }
+  });
+
+export function providerRunRecordFromAcceptedHandle(
+  inputValue: unknown,
+  handleValue: unknown,
+  acceptedAt: string,
+) {
+  const input = DurableResearchDiscoveryInputSchema.parse(inputValue);
+  const handle = DurableResearchDiscoveryHandleSchema.parse(handleValue);
+  if (
+    handle.binding.runId !== input.runId ||
+    handle.binding.jobId !== input.jobId ||
+    handle.binding.attemptId !== input.attemptId ||
+    handle.binding.caseId !== input.caseId ||
+    handle.binding.manifestFingerprint !== input.manifestFingerprint ||
+    handle.binding.externalIdempotencyKey !== input.externalIdempotencyKey ||
+    !["QUEUED", "IN_PROGRESS"].includes(handle.state)
+  ) {
+    throw new z.ZodError([
+      {
+        code: "custom",
+        path: ["handle"],
+        message: "Accepted provider handle must bind the exact discovery attempt",
+      },
+    ]);
+  }
+  return DurableResearchProviderRunRecordSchema.parse({
+    schemaVersion: 1,
+    runId: input.runId,
+    jobId: input.jobId,
+    attemptId: input.attemptId,
+    caseId: input.caseId,
+    provider: "openai",
+    providerResponseId: handle.providerResponseId,
+    state: handle.state,
+    requestedModel: handle.requestedModel,
+    providerModel: handle.providerModel,
+    traceId: handle.traceId,
+    manifestFingerprint: input.manifestFingerprint,
+    externalIdempotencyKey: input.externalIdempotencyKey,
+    startedAt: handle.startedAt,
+    acceptedAt,
+    lastObservedAt: handle.lastObservedAt,
+    inputBytes: handle.inputBytes,
+    dataControlMode: handle.dataControlMode,
+    projectIdFingerprint: handle.projectIdFingerprint,
+    privateContentIncluded: true,
+    publicationAuthority: "NONE",
+  });
+}
+
+export type DurableResearchDiscoveryHandle = z.infer<
+  typeof DurableResearchDiscoveryHandleSchema
+>;
+export type DurableResearchDiscoveryStartResult = Readonly<{
+  kind: "STARTED";
+  state: DurableResearchDiscoveryHandle["state"];
+  handle: DurableResearchDiscoveryHandle;
+}>;
+export type DurableResearchDiscoveryPollResult =
+  | Readonly<{
+      kind: "PENDING";
+      state: "QUEUED" | "IN_PROGRESS";
+      handle: DurableResearchDiscoveryHandle;
+    }>
+  | Readonly<{
+      kind: "COMPLETED";
+      state: "COMPLETED";
+      handle: DurableResearchDiscoveryHandle;
+      output: DurableResearchDiscoveryOutput;
+    }>
+  | Readonly<{
+      kind: "TERMINAL";
+      state: "FAILED" | "INCOMPLETE" | "CANCELLED";
+      handle: DurableResearchDiscoveryHandle;
+      failure: z.infer<typeof DurableResearchDiscoveryFailureSchema>;
+    }>;
+
 export interface DurableResearchDiscoveryProvider {
-  start(input: DurableResearchDiscoveryInput): Promise<unknown>;
-  retrieve(input: DurableResearchDiscoveryInput, handle: unknown): Promise<unknown>;
-  cancel(input: DurableResearchDiscoveryInput, handle: unknown): Promise<unknown>;
+  start(input: DurableResearchDiscoveryInput): Promise<DurableResearchDiscoveryStartResult>;
+  retrieve(
+    input: DurableResearchDiscoveryInput,
+    handle: DurableResearchDiscoveryHandle,
+  ): Promise<DurableResearchDiscoveryPollResult>;
 }
 
 /**

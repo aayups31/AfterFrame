@@ -3,6 +3,7 @@ import {
   DurableResearchDiscoveryInputSchema,
   DurableResearchDiscoveryOutputSchema,
   parseDurableResearchDiscoveryOutputForInput,
+  providerRunRecordFromAcceptedHandle,
 } from "@/application/research/durable-discovery-port";
 import { BLACK_HAWK_DOWN_CASE } from "@/fixtures/black-hawk-down/deterministic-spine.fixture";
 import {
@@ -166,5 +167,87 @@ describe("durable multi-axis discovery boundary", () => {
         sourceBody: "Hostile source instructions",
       }).success,
     ).toBe(false);
+  });
+
+  it("normalizes the full accepted provider handle into body-free recovery state", () => {
+    const record = providerRunRecordFromAcceptedHandle(
+      input,
+      {
+        providerResponseId: "resp_durable_discovery_1",
+        state: "IN_PROGRESS",
+        requestedModel: "gpt-test",
+        providerModel: "gpt-test-2026-08-01",
+        traceId: "trace-durable-discovery-1",
+        binding: {
+          runId: input.runId,
+          jobId: input.jobId,
+          attemptId: input.attemptId,
+          caseId: input.caseId,
+          manifestFingerprint: input.manifestFingerprint,
+          externalIdempotencyKey: input.externalIdempotencyKey,
+        },
+        startedAt: "2026-08-22T20:00:00.000Z",
+        lastObservedAt: "2026-08-22T20:00:01.000Z",
+        inputBytes: 2_000,
+        dataControlMode: "MODIFIED_ABUSE_MONITORING",
+        projectIdFingerprint: "f".repeat(64),
+        privateContentIncluded: true,
+      },
+      "2026-08-22T20:00:02.000Z",
+    );
+
+    expect(record).toMatchObject({
+      providerResponseId: "resp_durable_discovery_1",
+      traceId: "trace-durable-discovery-1",
+      manifestFingerprint: input.manifestFingerprint,
+      externalIdempotencyKey: input.externalIdempotencyKey,
+      dataControlMode: "MODIFIED_ABUSE_MONITORING",
+      publicationAuthority: "NONE",
+    });
+    expect(JSON.stringify(record)).not.toContain(input.exactQuestion);
+  });
+
+  it("rejects a provider handle from another attempt or terminal response", () => {
+    const baseHandle = {
+      providerResponseId: "resp_durable_discovery_1",
+      state: "QUEUED",
+      requestedModel: "gpt-test",
+      providerModel: "gpt-test",
+      traceId: "trace-durable-discovery-1",
+      binding: {
+        runId: input.runId,
+        jobId: input.jobId,
+        attemptId: input.attemptId,
+        caseId: input.caseId,
+        manifestFingerprint: input.manifestFingerprint,
+        externalIdempotencyKey: input.externalIdempotencyKey,
+      },
+      startedAt: "2026-08-22T20:00:00.000Z",
+      lastObservedAt: "2026-08-22T20:00:01.000Z",
+      inputBytes: 2_000,
+      dataControlMode: "MODIFIED_ABUSE_MONITORING",
+      projectIdFingerprint: "f".repeat(64),
+      privateContentIncluded: true,
+    } as const;
+    expect(() =>
+      providerRunRecordFromAcceptedHandle(
+        input,
+        {
+          ...baseHandle,
+          binding: {
+            ...baseHandle.binding,
+            attemptId: "76000000-0000-4000-8000-000000000099",
+          },
+        },
+        "2026-08-22T20:00:02.000Z",
+      ),
+    ).toThrow(/exact discovery attempt/);
+    expect(() =>
+      providerRunRecordFromAcceptedHandle(
+        input,
+        { ...baseHandle, state: "COMPLETED" },
+        "2026-08-22T20:00:02.000Z",
+      ),
+    ).toThrow(/exact discovery attempt/);
   });
 });
