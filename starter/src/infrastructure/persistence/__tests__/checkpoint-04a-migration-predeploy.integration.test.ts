@@ -74,26 +74,139 @@ const expectedTriggerFunctions = new Map([
   ],
 ]);
 
-const requiredConstraintNames = [
-  "af_resolved_identities_run_case_fk",
-  "af_resolved_identities_attempt_fk",
-  "af_resolved_identities_display_name_check",
-  "af_resolved_identities_alternate_names_check",
-  "af_resolved_identities_disambiguators_check",
-  "af_resolved_identities_provenance_check",
-  "af_resolved_identities_time_check",
-  "af_attempt_manifests_run_case_fk",
-  "af_attempt_manifests_attempt_fk",
-  "af_attempt_manifests_identity_fk",
-  "af_attempt_manifests_predecessor_job_fk",
-  "af_attempt_manifests_predecessor_attempt_fk",
-  "af_attempt_manifests_predecessor_output_fk",
-  "af_attempt_manifests_stage_shape_check",
-  "af_research_outputs_causal_reference_key",
-  "af_research_outputs_one_per_attempt_key",
-  "af_research_outputs_subject_identity_fk",
-  "af_research_outputs_nonidentity_link_check",
-] as const;
+const expectedConstraintPosture = [
+  ...[
+    "af_attempt_manifests_manifest_object_check",
+    "af_attempt_manifests_publication_authority_check",
+    "af_attempt_manifests_schema_version_check",
+    "af_attempt_manifests_stage_shape_check",
+  ].map((constraint_name) => ({
+    table_name: "af_research_attempt_input_manifests",
+    constraint_name,
+    constraint_type: "c",
+    deferrable: false,
+    initially_deferred: false,
+    validated: true,
+  })),
+  ...[
+    "af_attempt_manifests_attempt_fk",
+    "af_attempt_manifests_identity_fk",
+    "af_attempt_manifests_predecessor_attempt_fk",
+    "af_attempt_manifests_predecessor_job_fk",
+    "af_attempt_manifests_predecessor_output_fk",
+    "af_attempt_manifests_run_case_fk",
+  ].map((constraint_name) => ({
+    table_name: "af_research_attempt_input_manifests",
+    constraint_name,
+    constraint_type: "f",
+    deferrable: false,
+    initially_deferred: false,
+    validated: true,
+  })),
+  {
+    table_name: "af_research_attempt_input_manifests",
+    constraint_name: "af_attempt_manifests_pkey",
+    constraint_type: "p",
+    deferrable: false,
+    initially_deferred: false,
+    validated: true,
+  },
+  ...[
+    "af_attempt_manifests_attempt_key",
+    "af_attempt_manifests_run_manifest_key",
+    "af_attempt_manifests_run_request_key",
+  ].map((constraint_name) => ({
+    table_name: "af_research_attempt_input_manifests",
+    constraint_name,
+    constraint_type: "u",
+    deferrable: false,
+    initially_deferred: false,
+    validated: true,
+  })),
+  {
+    table_name: "af_research_stage_outputs",
+    constraint_name: "af_research_outputs_identity_link_trigger",
+    constraint_type: "t",
+    deferrable: true,
+    initially_deferred: true,
+    validated: true,
+  },
+  ...[
+    ["af_research_outputs_causal_reference_key", "u"],
+    ["af_research_outputs_nonidentity_link_check", "c"],
+    ["af_research_outputs_one_per_attempt_key", "u"],
+  ].map(([constraint_name, constraint_type]) => ({
+    table_name: "af_research_stage_outputs",
+    constraint_name,
+    constraint_type,
+    deferrable: false,
+    initially_deferred: false,
+    validated: true,
+  })),
+  {
+    table_name: "af_research_stage_outputs",
+    constraint_name: "af_research_outputs_subject_identity_fk",
+    constraint_type: "f",
+    deferrable: true,
+    initially_deferred: true,
+    validated: true,
+  },
+  ...[
+    "af_resolved_identities_alternate_names_check",
+    "af_resolved_identities_data_class_check",
+    "af_resolved_identities_disambiguators_check",
+    "af_resolved_identities_display_name_check",
+    "af_resolved_identities_evidence_status_check",
+    "af_resolved_identities_provenance_check",
+    "af_resolved_identities_publication_authority_check",
+    "af_resolved_identities_review_state_check",
+    "af_resolved_identities_schema_version_check",
+    "af_resolved_identities_time_check",
+    "af_resolved_identities_verification_state_check",
+  ].map((constraint_name) => ({
+    table_name: "af_resolved_subject_identities",
+    constraint_name,
+    constraint_type: "c",
+    deferrable: false,
+    initially_deferred: false,
+    validated: true,
+  })),
+  ...["af_resolved_identities_attempt_fk", "af_resolved_identities_run_case_fk"].map(
+    (constraint_name) => ({
+      table_name: "af_resolved_subject_identities",
+      constraint_name,
+      constraint_type: "f",
+      deferrable: false,
+      initially_deferred: false,
+      validated: true,
+    }),
+  ),
+  {
+    table_name: "af_resolved_subject_identities",
+    constraint_name: "af_resolved_identities_pkey",
+    constraint_type: "p",
+    deferrable: false,
+    initially_deferred: false,
+    validated: true,
+  },
+  ...[
+    "af_resolved_identities_attempt_key",
+    "af_resolved_identities_run_attempt_identity_key",
+    "af_resolved_identities_run_identity_key",
+    "af_resolved_identities_run_key",
+  ].map((constraint_name) => ({
+    table_name: "af_resolved_subject_identities",
+    constraint_name,
+    constraint_type: "u",
+    deferrable: false,
+    initially_deferred: false,
+    validated: true,
+  })),
+].toSorted((left, right) =>
+  `${left.table_name}.${left.constraint_name}`.localeCompare(
+    `${right.table_name}.${right.constraint_name}`,
+  ),
+);
 
 function loadDatabaseUrl() {
   if (process.env.SUPABASE_DB_URL === undefined) {
@@ -837,17 +950,25 @@ describeDatabase("checkpoint 04A migration 008 predeploy", () => {
             ({ table_name, constraint_name }) =>
               !baselineConstraintKeys.has(`${table_name}.${constraint_name}`),
           );
-          expect(addedConstraints).toHaveLength(28);
           expect(
-            addedConstraints.every(({ validated }) => validated),
-          ).toBe(true);
-          for (const constraintName of requiredConstraintNames) {
-            expect(
-              addedConstraints.some(
-                ({ constraint_name }) => constraint_name === constraintName,
-              ),
-            ).toBe(true);
-          }
+            addedConstraints.map(
+              ({
+                table_name,
+                constraint_name,
+                constraint_type,
+                deferrable,
+                initially_deferred,
+                validated,
+              }) => ({
+                table_name,
+                constraint_name,
+                constraint_type,
+                deferrable,
+                initially_deferred,
+                validated,
+              }),
+            ),
+          ).toEqual(expectedConstraintPosture);
           expect(
             addedConstraints.find(
               ({ constraint_name }) =>

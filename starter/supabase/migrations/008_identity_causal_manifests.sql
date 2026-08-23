@@ -101,8 +101,10 @@ end;
 $preflight$;
 
 create table public.af_resolved_subject_identities (
-  schema_version smallint not null check (schema_version = 1),
-  id uuid primary key,
+  schema_version smallint not null
+    constraint af_resolved_identities_schema_version_check
+      check (schema_version = 1),
+  id uuid constraint af_resolved_identities_pkey primary key,
   case_id uuid not null,
   run_id uuid not null,
   job_id uuid not null,
@@ -112,13 +114,23 @@ create table public.af_resolved_subject_identities (
   alternate_names text[] not null,
   disambiguators jsonb not null,
   identity_fingerprint public.af_sha256 not null,
-  data_class text not null check (data_class = 'PUBLIC'),
-  verification_state text not null check (verification_state = 'RESOLVER_VERIFIED'),
+  data_class text not null
+    constraint af_resolved_identities_data_class_check
+      check (data_class = 'PUBLIC'),
+  verification_state text not null
+    constraint af_resolved_identities_verification_state_check
+      check (verification_state = 'RESOLVER_VERIFIED'),
   resolver_id public.af_slug not null,
   resolver_version public.af_version_tag not null,
-  evidence_status text not null check (evidence_status = 'NOT_EVIDENCE'),
-  review_state public.af_review_state not null check (review_state = 'PROPOSED'),
-  publication_authority text not null check (publication_authority = 'NONE'),
+  evidence_status text not null
+    constraint af_resolved_identities_evidence_status_check
+      check (evidence_status = 'NOT_EVIDENCE'),
+  review_state public.af_review_state not null
+    constraint af_resolved_identities_review_state_check
+      check (review_state = 'PROPOSED'),
+  publication_authority text not null
+    constraint af_resolved_identities_publication_authority_check
+      check (publication_authority = 'NONE'),
   provenance_inputs jsonb not null,
   resolved_at timestamptz not null,
   created_at timestamptz not null,
@@ -144,10 +156,11 @@ create table public.af_resolved_subject_identities (
     and jsonb_array_length(provenance_inputs) = 2
   ),
   constraint af_resolved_identities_time_check check (resolved_at <= created_at),
-  unique (run_id),
-  unique (attempt_id),
-  unique (run_id, id),
-  unique (run_id, attempt_id, id)
+  constraint af_resolved_identities_run_key unique (run_id),
+  constraint af_resolved_identities_attempt_key unique (attempt_id),
+  constraint af_resolved_identities_run_identity_key unique (run_id, id),
+  constraint af_resolved_identities_run_attempt_identity_key
+    unique (run_id, attempt_id, id)
 );
 
 comment on table public.af_resolved_subject_identities is
@@ -160,8 +173,10 @@ alter table public.af_research_stage_outputs
   unique (run_id, job_id, attempt_id, id);
 
 create table public.af_research_attempt_input_manifests (
-  schema_version smallint not null check (schema_version = 1),
-  id uuid primary key,
+  schema_version smallint not null
+    constraint af_attempt_manifests_schema_version_check
+      check (schema_version = 1),
+  id uuid constraint af_attempt_manifests_pkey primary key,
   case_id uuid not null,
   run_id uuid not null,
   job_id uuid not null,
@@ -174,8 +189,12 @@ create table public.af_research_attempt_input_manifests (
   predecessor_output_fingerprint public.af_sha256,
   manifest_fingerprint public.af_sha256 not null,
   request_fingerprint public.af_sha256 not null,
-  manifest jsonb not null check (jsonb_typeof(manifest) = 'object'),
-  publication_authority text not null check (publication_authority = 'NONE'),
+  manifest jsonb not null
+    constraint af_attempt_manifests_manifest_object_check
+      check (jsonb_typeof(manifest) = 'object'),
+  publication_authority text not null
+    constraint af_attempt_manifests_publication_authority_check
+      check (publication_authority = 'NONE'),
   authored_at timestamptz not null,
   constraint af_attempt_manifests_run_case_fk
     foreign key (run_id, case_id)
@@ -215,9 +234,10 @@ create table public.af_research_attempt_input_manifests (
       and predecessor_output_fingerprint is not null
     )
   ),
-  unique (attempt_id),
-  unique (run_id, id),
-  unique (run_id, request_fingerprint)
+  constraint af_attempt_manifests_attempt_key unique (attempt_id),
+  constraint af_attempt_manifests_run_manifest_key unique (run_id, id),
+  constraint af_attempt_manifests_run_request_key
+    unique (run_id, request_fingerprint)
 );
 
 comment on table public.af_research_attempt_input_manifests is

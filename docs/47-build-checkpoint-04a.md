@@ -11,12 +11,15 @@ user-facing answer.
 
 - The TypeScript, adapter, migration, and rollback-test implementation is
   complete and locally verified.
-- Migrations 001–007 remain the deployed database baseline.
-- Migration 008 is a release candidate and has **not** been deployed yet.
-- Remote preflight is blocked because the current `.env.local` Supabase API URL
-  does not resolve and its pooler URI names a different project tenant. No SQL
-  was applied. Replace all Supabase values with values copied from the same
-  project before running the guarded checks below.
+- Migrations 001–008 are deployed to the configured Supabase project.
+- The guarded migration preflight applied migration 008 inside a transaction,
+  verified the complete catalog posture, and restored the exact 001–007
+  baseline before the forward-only deployment.
+- The post-deploy Supabase/TMDB lifecycle passes through start, durable identity
+  resolution and completion, actor-scoped identity read, causally bound
+  `SCOPING` claim, checkpoint, retryable handoff, and same-attempt reclaim. The
+  test transaction restores exact baseline row counts and production retains
+  zero research runs.
 - The public investigate route remains disabled outside mock mode.
 
 This distinction is intentional: local code completion is not represented as a
@@ -146,8 +149,10 @@ Current local release gates pass strict TypeScript, ESLint with no warnings,
 validator, and `npm audit` with zero known vulnerabilities. Three database
 tests remain explicitly guarded rather than silently mocked.
 
-Before deploying migration 008, apply it inside a rollback-only transaction and
-compare the entire database catalog and row counts before and after:
+The deployment gate applies migration 008 inside a rollback-only transaction
+and compares the entire database catalog and row counts before and after. Its
+constraint assertion covers all 37 deliberately named checks, foreign keys,
+unique keys, primary keys, and the deferred constraint-trigger record:
 
 ```bash
 cd starter
@@ -155,7 +160,7 @@ nvm use
 npm run test:migration:008:predeploy
 ```
 
-After migration 008 is deployed, run the real rollback lifecycle:
+The post-deploy gate runs the real rollback lifecycle:
 
 ```bash
 cd starter

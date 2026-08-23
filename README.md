@@ -68,7 +68,7 @@ npm run dev
 
 Visit `http://localhost:3000`.
 
-The starter UI remains a non-binding mock. Checkpoint 03 deployed authenticated Postgres persistence and proved the durable worker lifecycle. Checkpoint 04A now implements the first concrete durable `IDENTITY` executor, resolver-verified public movie identity, and Postgres-authored causal manifests; migration 008 is locally verified but awaits the corrected same-project Supabase connection before deployment. The public production research route remains disabled until discovery, source/locator resolution, evidence and claim persistence, corroboration, sequencing, provenance, and domain eval gates pass.
+The starter UI remains a non-binding mock. Checkpoint 03 deployed authenticated Postgres persistence and proved the durable worker lifecycle. Checkpoint 04A now deploys the first concrete durable `IDENTITY` executor boundary, resolver-verified public movie identity, and Postgres-authored causal manifests through migration 008. Its real Supabase/TMDB lifecycle passes through the causally bound `SCOPING` claim and rolls all test records back. The public production research route remains disabled until discovery, source/locator resolution, evidence and claim persistence, corroboration, sequencing, provenance, and domain eval gates pass.
 
 ### 3. Start Codex with GPT-5.6 Sol
 

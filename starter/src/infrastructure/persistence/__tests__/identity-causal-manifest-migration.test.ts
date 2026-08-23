@@ -30,8 +30,12 @@ describe("identity and causal input manifest migration", () => {
     expect(migration).toContain(
       "create table public.af_research_attempt_input_manifests (",
     );
-    expect(migration).toContain("evidence_status text not null check (evidence_status = 'NOT_EVIDENCE')");
-    expect(migration).toContain("publication_authority text not null check (publication_authority = 'NONE')");
+    expect(migration).toMatch(
+      /evidence_status text not null\s+constraint af_resolved_identities_evidence_status_check\s+check \(evidence_status = 'NOT_EVIDENCE'\)/,
+    );
+    expect(migration).toMatch(
+      /publication_authority text not null\s+constraint af_(?:resolved_identities|attempt_manifests)_publication_authority_check\s+check \(publication_authority = 'NONE'\)/,
+    );
     expect(migration).toContain("af_resolved_identities_immutable_trigger");
     expect(migration).toContain("af_attempt_manifests_immutable_trigger");
     expect(migration).toContain(

@@ -47,7 +47,7 @@ Start with `../prompts/codex/00-bootstrap.md`.
 - `src/infrastructure/persistence` implements the investigation store through versioned, actor-scoped Postgres RPCs.
 - `src/specialists/movie/infrastructure` resolves any structurally valid TMDB movie reference without treating provider metadata as evidence.
 - `src/application/research-worker/executors` contains the first concrete durable `IDENTITY` executor; the V1 registry composes only that stage and fails closed for later stages.
-- `src/infrastructure/persistence` authors immutable causal attempt manifests and persists the exact identity/output relationship through migration 008, which is not deployed yet.
+- `src/infrastructure/persistence` authors immutable causal attempt manifests and persists the exact identity/output relationship through deployed migration 008.
 - `src/infrastructure/research` contains the shadow-only OpenAI web-source discovery adapter. It is not connected to a public route or durable worker yet.
 
 Future visual libraries such as `gsap` or `@xyflow/react` remain intentionally deferred; the prototype UI is not the production build target.
