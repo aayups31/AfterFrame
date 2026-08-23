@@ -94,6 +94,15 @@ export interface ResearchContextReader {
   getBranch(branchId: string): Promise<InvestigationBranch | null>;
 }
 
+export interface ResearchProviderRunReader {
+  getAcceptedProviderRun(input: Readonly<{
+    actorId: string;
+    runId: string;
+    jobId: string;
+    attemptId: string;
+  }>): Promise<ResearchProviderRunRecord | null>;
+}
+
 export interface ResearchRunFingerprintPort {
   fingerprintStartRequest(
     actorId: string,
