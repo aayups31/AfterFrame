@@ -312,6 +312,32 @@ function sha256(value: string) {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+export function openAIBackgroundDiscoveryExecutionIdentity(
+  requestedModel: string,
+  providerModel: string,
+) {
+  return {
+    model: {
+      provider: "openai" as const,
+      model: requestedModel,
+      snapshot: providerModel,
+    },
+    prompt: {
+      id: PROMPT_ID,
+      version: PROMPT_VERSION,
+      templateFingerprint: sha256(DISCOVERY_INSTRUCTIONS),
+    },
+    schema: {
+      id: OUTPUT_SCHEMA_ID,
+      version: OUTPUT_SCHEMA_VERSION,
+      schemaFingerprint: sha256(
+        "candidates[url,title,sourceClass,axisIds]@afterframe-v2",
+      ),
+    },
+    tool: { id: TOOL_ID, version: TOOL_VERSION },
+  } as const;
+}
+
 function providerState(status: z.infer<typeof ProviderStatusSchema>) {
   return status.toUpperCase() as z.infer<
     typeof OpenAIBackgroundDiscoveryStateSchema
@@ -711,28 +737,15 @@ export class OpenAIBackgroundResearchDiscoveryProvider {
       });
     }
 
+    const executionIdentity = openAIBackgroundDiscoveryExecutionIdentity(
+      this.#model,
+      response.data.model,
+    );
     const execution = ExecutionMetadataSchema.parse({
       executionKind: "MODEL_TOOL",
       traceId: handle.traceId,
       providerRunId: response.data.id,
-      model: {
-        provider: "openai",
-        model: this.#model,
-        snapshot: response.data.model,
-      },
-      prompt: {
-        id: PROMPT_ID,
-        version: PROMPT_VERSION,
-        templateFingerprint: sha256(DISCOVERY_INSTRUCTIONS),
-      },
-      schema: {
-        id: OUTPUT_SCHEMA_ID,
-        version: OUTPUT_SCHEMA_VERSION,
-        schemaFingerprint: sha256(
-          "candidates[url,title,sourceClass,axisIds]@afterframe-v2",
-        ),
-      },
-      tool: { id: TOOL_ID, version: TOOL_VERSION },
+      ...executionIdentity,
       telemetryState: "COMPLETE",
       usage: {
         inputTokens: usage.input_tokens,

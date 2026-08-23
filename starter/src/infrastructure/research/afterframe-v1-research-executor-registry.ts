@@ -9,6 +9,7 @@ import { ResearchWorkerExecutionPlanSchema } from "@/core/research-runs/worker-s
 import type { SupabaseRpcInvoker } from "@/infrastructure/persistence/supabase-investigation-store";
 import { SupabaseResearchIdentityReader } from "@/infrastructure/persistence/supabase-research-identity-reader";
 import { TmdbSubjectIdentityResolver } from "@/specialists/movie/infrastructure/tmdb-subject-identity-resolver";
+import { openAIBackgroundDiscoveryExecutionIdentity } from "@/infrastructure/research/openai-background-discovery";
 
 const DEFAULT_TMDB_TIMEOUT_MS = 10_000;
 
@@ -66,6 +67,40 @@ export function afterFrameV1ScopingExecutionPlan() {
     tool: null,
     privateContentIncluded: false,
     automaticRetrySafety: "IDEMPOTENT_PROVIDER_REQUEST",
+  });
+}
+
+/**
+ * Claim-time identity for the resumable DISCOVERY executor. The provider
+ * snapshot is explicit so an alias cannot silently become audit provenance.
+ * Production registration remains gated on controlled live evaluation.
+ */
+export function afterFrameV1DiscoveryExecutionPlan(
+  requestedModel: string,
+  expectedProviderSnapshot: string,
+) {
+  const identity = openAIBackgroundDiscoveryExecutionIdentity(
+    requestedModel,
+    expectedProviderSnapshot,
+  );
+  return ResearchWorkerExecutionPlanSchema.parse({
+    executorId: "discovery-stage-executor",
+    executorVersion: "1.0.0",
+    configurationFingerprint: sha256(
+      JSON.stringify({
+        stage: "DISCOVERY",
+        specialist: "movie-investigator@0.1.0",
+        requestedModel,
+        expectedProviderSnapshot,
+        prompt: identity.prompt,
+        schema: identity.schema,
+        tool: identity.tool,
+      }),
+    ),
+    executionKind: "MODEL_TOOL",
+    ...identity,
+    privateContentIncluded: true,
+    automaticRetrySafety: "RESUMABLE_PROVIDER_RUN",
   });
 }
 
