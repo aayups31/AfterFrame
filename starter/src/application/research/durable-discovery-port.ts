@@ -12,6 +12,10 @@ import {
   NoPublicationAuthoritySchema,
 } from "@/core/research-runs/schemas";
 import {
+  ResearchJobLeaseCursorSchema,
+  ResearchWorkerCheckpointRecordSchema,
+} from "@/core/research-runs/worker-schemas";
+import {
   EntityIdSchema,
   HttpUrlSchema,
   IsoDateTimeSchema,
@@ -411,6 +415,35 @@ export type DurableResearchDiscoveryPollResult =
       handle: DurableResearchDiscoveryHandle;
       failure: z.infer<typeof DurableResearchDiscoveryFailureSchema>;
     }>;
+
+export const DurableResearchProviderAcceptanceResultSchema = z.discriminatedUnion(
+  "status",
+  [
+    z
+      .object({
+        status: z.enum(["COMMITTED", "REPLAY"]),
+        lease: ResearchJobLeaseCursorSchema,
+        checkpoint: ResearchWorkerCheckpointRecordSchema,
+        providerRun: DurableResearchProviderRunRecordSchema,
+      })
+      .strict(),
+    z.object({ status: z.enum(["CANCELLED", "LEASE_LOST"]) }).strict(),
+  ],
+);
+
+export type DurableResearchProviderAcceptanceResult = z.infer<
+  typeof DurableResearchProviderAcceptanceResultSchema
+>;
+
+export interface DurableResearchProviderAcceptanceStore {
+  acceptProviderRun(input: Readonly<{
+    actorId: string;
+    lease: z.infer<typeof ResearchJobLeaseCursorSchema>;
+    checkpoint: z.infer<typeof ResearchWorkerCheckpointRecordSchema>;
+    providerRun: z.infer<typeof DurableResearchProviderRunRecordSchema>;
+    leaseDurationSeconds: number;
+  }>): Promise<DurableResearchProviderAcceptanceResult>;
+}
 
 export interface DurableResearchDiscoveryProvider {
   start(input: DurableResearchDiscoveryInput): Promise<DurableResearchDiscoveryStartResult>;
