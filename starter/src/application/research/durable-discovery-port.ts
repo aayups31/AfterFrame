@@ -11,10 +11,7 @@ import {
   ExecutionMetadataSchema,
   NoPublicationAuthoritySchema,
 } from "@/core/research-runs/schemas";
-import {
-  ResearchJobLeaseCursorSchema,
-  ResearchWorkerCheckpointRecordSchema,
-} from "@/core/research-runs/worker-schemas";
+import { ResearchProviderRunRecordSchema } from "@/core/research-runs/provider-runs";
 import {
   EntityIdSchema,
   HttpUrlSchema,
@@ -302,43 +299,8 @@ export const DurableResearchDiscoveryFailureSchema = z
  * make trace, model, timing, and data-control metadata unknowable after a
  * worker crash, so the accepted handle is normalized into this exact record.
  */
-export const DurableResearchProviderRunRecordSchema = z
-  .object({
-    schemaVersion: z.literal(1),
-    runId: EntityIdSchema,
-    jobId: EntityIdSchema,
-    attemptId: EntityIdSchema,
-    caseId: EntityIdSchema,
-    provider: z.literal("openai"),
-    providerResponseId: OpaqueReferenceSchema,
-    state: z.enum(["QUEUED", "IN_PROGRESS"]),
-    requestedModel: z.string().trim().min(1).max(200),
-    providerModel: z.string().trim().min(1).max(200),
-    traceId: OpaqueReferenceSchema,
-    manifestFingerprint: Sha256Schema,
-    externalIdempotencyKey: Sha256Schema,
-    startedAt: IsoDateTimeSchema,
-    acceptedAt: IsoDateTimeSchema,
-    lastObservedAt: IsoDateTimeSchema,
-    inputBytes: z.number().int().nonnegative(),
-    dataControlMode: z.literal("MODIFIED_ABUSE_MONITORING"),
-    projectIdFingerprint: Sha256Schema,
-    privateContentIncluded: z.literal(true),
-    publicationAuthority: NoPublicationAuthoritySchema,
-  })
-  .strict()
-  .superRefine((record, context) => {
-    const startedAt = new Date(record.startedAt).getTime();
-    const acceptedAt = new Date(record.acceptedAt).getTime();
-    const observedAt = new Date(record.lastObservedAt).getTime();
-    if (acceptedAt < startedAt || observedAt < startedAt) {
-      context.addIssue({
-        code: "custom",
-        path: ["acceptedAt"],
-        message: "Provider acceptance and observation cannot precede provider start",
-      });
-    }
-  });
+export const DurableResearchProviderRunRecordSchema =
+  ResearchProviderRunRecordSchema;
 
 export function providerRunRecordFromAcceptedHandle(
   inputValue: unknown,
@@ -415,35 +377,6 @@ export type DurableResearchDiscoveryPollResult =
       handle: DurableResearchDiscoveryHandle;
       failure: z.infer<typeof DurableResearchDiscoveryFailureSchema>;
     }>;
-
-export const DurableResearchProviderAcceptanceResultSchema = z.discriminatedUnion(
-  "status",
-  [
-    z
-      .object({
-        status: z.enum(["COMMITTED", "REPLAY"]),
-        lease: ResearchJobLeaseCursorSchema,
-        checkpoint: ResearchWorkerCheckpointRecordSchema,
-        providerRun: DurableResearchProviderRunRecordSchema,
-      })
-      .strict(),
-    z.object({ status: z.enum(["CANCELLED", "LEASE_LOST"]) }).strict(),
-  ],
-);
-
-export type DurableResearchProviderAcceptanceResult = z.infer<
-  typeof DurableResearchProviderAcceptanceResultSchema
->;
-
-export interface DurableResearchProviderAcceptanceStore {
-  acceptProviderRun(input: Readonly<{
-    actorId: string;
-    lease: z.infer<typeof ResearchJobLeaseCursorSchema>;
-    checkpoint: z.infer<typeof ResearchWorkerCheckpointRecordSchema>;
-    providerRun: z.infer<typeof DurableResearchProviderRunRecordSchema>;
-    leaseDurationSeconds: number;
-  }>): Promise<DurableResearchProviderAcceptanceResult>;
-}
 
 export interface DurableResearchDiscoveryProvider {
   start(input: DurableResearchDiscoveryInput): Promise<DurableResearchDiscoveryStartResult>;

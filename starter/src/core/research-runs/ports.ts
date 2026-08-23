@@ -26,6 +26,10 @@ import type {
   ResearchWorkerExecutorIdentity,
   ResearchWorkerFailureEnvelope,
 } from "@/core/research-runs/worker-schemas";
+import type {
+  ResearchProviderAcceptanceResult,
+  ResearchProviderRunRecord,
+} from "@/core/research-runs/provider-runs";
 
 export const START_RESEARCH_RUN_COMMAND = "start_research_run" as const;
 
@@ -158,6 +162,9 @@ export type CheckpointResearchJobInput = Readonly<{
   leaseDurationSeconds: number;
 }>;
 
+export type AcceptResearchProviderRunInput = CheckpointResearchJobInput &
+  Readonly<{ providerRun: ResearchProviderRunRecord }>;
+
 export type CompleteDurableResearchJobInput = Readonly<{
   actorId: string;
   lease: ResearchJobLeaseCursor;
@@ -194,6 +201,9 @@ export interface DurableResearchWorkerStore {
   checkpointResearchJob(
     input: CheckpointResearchJobInput,
   ): Promise<ResearchJobCheckpointResult>;
+  acceptResearchProviderRun(
+    input: AcceptResearchProviderRunInput,
+  ): Promise<ResearchProviderAcceptanceResult>;
   completeResearchJob(
     input: CompleteDurableResearchJobInput,
   ): Promise<ResearchJobCompletionResult>;
@@ -213,6 +223,10 @@ export type DurableResearchStageExecutionInput = Readonly<{
   signal: AbortSignal;
   checkpoint: (
     checkpoint: ResearchWorkerCheckpointProposal,
+  ) => Promise<ResearchWorkerCheckpointRecord>;
+  acceptProviderRun: (
+    checkpoint: ResearchWorkerCheckpointProposal,
+    providerRun: ResearchProviderRunRecord,
   ) => Promise<ResearchWorkerCheckpointRecord>;
 }>;
 

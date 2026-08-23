@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type {
+  AcceptResearchProviderRunInput,
   CheckpointResearchJobInput,
   ClaimResearchJobInput,
   CompleteDurableResearchJobInput,
@@ -139,6 +140,33 @@ const checkpointInput: CheckpointResearchJobInput = {
   leaseDurationSeconds: 60,
 };
 
+const acceptanceInput: AcceptResearchProviderRunInput = {
+  ...checkpointInput,
+  providerRun: {
+    schemaVersion: 1,
+    runId,
+    jobId,
+    attemptId: ATTEMPT_ID,
+    caseId: BLACK_HAWK_DOWN_RESEARCH_BUNDLE.run.caseId,
+    provider: "openai",
+    providerResponseId: "provider-run-1",
+    state: "IN_PROGRESS",
+    requestedModel: "gpt-test",
+    providerModel: "gpt-test-2026-08-01",
+    traceId: "trace-provider-run-1",
+    manifestFingerprint: HASH_A,
+    externalIdempotencyKey: HASH_C,
+    startedAt: T1,
+    acceptedAt: T2,
+    lastObservedAt: T2,
+    inputBytes: 100,
+    dataControlMode: "MODIFIED_ABUSE_MONITORING",
+    projectIdFingerprint: HASH_B,
+    privateContentIncluded: true,
+    publicationAuthority: "NONE",
+  },
+};
+
 const completeInput: CompleteDurableResearchJobInput = {
   actorId: ACTOR_ID,
   lease,
@@ -174,6 +202,7 @@ describe("Supabase durable research worker store", () => {
       },
       af_heartbeat_research_job_v1: { status: "CANCELLED" },
       af_checkpoint_research_job_v1: { status: "LEASE_LOST" },
+      af_accept_research_provider_run_v1: { status: "LEASE_LOST" },
       af_complete_research_job_v2: { status: "CANCELLED" },
       af_fail_research_job_v1: { status: "LEASE_LOST" },
       af_release_research_job_v1: { status: "CANCELLED" },
@@ -190,6 +219,7 @@ describe("Supabase durable research worker store", () => {
     await store.claimResearchJob(claimInput);
     await store.heartbeatResearchJob(heartbeatInput);
     await store.checkpointResearchJob(checkpointInput);
+    await store.acceptResearchProviderRun(acceptanceInput);
     await store.completeResearchJob(completeInput);
     await store.failResearchJob(failInput);
     await store.releaseResearchJob(releaseInput);
@@ -198,6 +228,7 @@ describe("Supabase durable research worker store", () => {
       "af_claim_research_job_v2",
       "af_heartbeat_research_job_v1",
       "af_checkpoint_research_job_v1",
+      "af_accept_research_provider_run_v1",
       "af_complete_research_job_v2",
       "af_fail_research_job_v1",
       "af_release_research_job_v1",
@@ -230,19 +261,26 @@ describe("Supabase durable research worker store", () => {
     expect(calls[3]?.parameters).toEqual({
       p_actor_id: ACTOR_ID,
       p_lease: lease,
+      p_checkpoint: checkpointInput.checkpoint,
+      p_provider_run: acceptanceInput.providerRun,
+      p_lease_seconds: 60,
+    });
+    expect(calls[4]?.parameters).toEqual({
+      p_actor_id: ACTOR_ID,
+      p_lease: lease,
       p_idempotency_key: "complete-once",
       p_result: completeInput.result,
       p_output_fingerprint: HASH_B,
       p_execution: completion,
     });
-    expect(calls[4]?.parameters).toEqual({
+    expect(calls[5]?.parameters).toEqual({
       p_actor_id: ACTOR_ID,
       p_lease: lease,
       p_idempotency_key: "failure-once",
       p_failure: failure,
       p_execution: completion,
     });
-    expect(calls[5]?.parameters).toEqual({
+    expect(calls[6]?.parameters).toEqual({
       p_actor_id: ACTOR_ID,
       p_lease: lease,
       p_idempotency_key: "release-once",

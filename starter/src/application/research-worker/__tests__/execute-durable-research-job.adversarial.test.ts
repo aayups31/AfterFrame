@@ -4,10 +4,12 @@ import {
   createDurableResearchWorkerService,
 } from "@/application/research-worker/execute-durable-research-job";
 import type {
+  AcceptResearchProviderRunInput,
   CheckpointResearchJobInput,
   ClaimResearchJobInput,
   CompleteDurableResearchJobInput,
   DurableResearchStageExecutor,
+  DurableResearchStageExecutionInput,
   DurableResearchWorkerStore,
   FailDurableResearchJobInput,
   HeartbeatResearchJobInput,
@@ -108,6 +110,35 @@ const retryableProviderFailure = {
   diagnosticFingerprint: null,
   redactionState: "BODY_FREE",
 } as const;
+
+function providerRunFor(
+  input: DurableResearchStageExecutionInput,
+  providerResponseId: string,
+) {
+  return {
+    schemaVersion: 1 as const,
+    runId: input.claim.run.id,
+    jobId: input.claim.job.id,
+    attemptId: input.claim.attempt.id,
+    caseId: input.claim.run.caseId,
+    provider: "openai" as const,
+    providerResponseId,
+    state: "IN_PROGRESS" as const,
+    requestedModel: "gpt-test",
+    providerModel: "gpt-test-2026-08-01",
+    traceId: `trace-${providerResponseId}`,
+    manifestFingerprint: input.claim.inputManifest.manifestFingerprint,
+    externalIdempotencyKey: input.externalIdempotencyKey,
+    startedAt: T1,
+    acceptedAt: T2,
+    lastObservedAt: T2,
+    inputBytes: 1_000,
+    dataControlMode: "MODIFIED_ABUSE_MONITORING" as const,
+    projectIdFingerprint: "f".repeat(64),
+    privateContentIncluded: true as const,
+    publicationAuthority: "NONE" as const,
+  };
+}
 
 function claimedWork(input: ClaimResearchJobInput): ClaimedResearchJob {
   const run = transitionResearchRun(BLACK_HAWK_DOWN_RESEARCH_BUNDLE.run, {
@@ -216,6 +247,7 @@ class Store implements DurableResearchWorkerStore {
   });
   heartbeatResult: ResearchJobHeartbeatResult | null = null;
   checkpointInput: CheckpointResearchJobInput | null = null;
+  acceptanceInput: AcceptResearchProviderRunInput | null = null;
   checkpointTransform:
     | ((input: CheckpointResearchJobInput) => ResearchJobCheckpointResult)
     | null = null;
@@ -260,6 +292,23 @@ class Store implements DurableResearchWorkerStore {
         ...input.lease,
         jobVersion: input.lease.jobVersion + 1,
         attemptVersion: input.lease.attemptVersion + 1,
+        heartbeatAt: T2,
+        expiresAt: T4,
+      },
+    };
+  }
+
+  async acceptResearchProviderRun(input: AcceptResearchProviderRunInput) {
+    this.calls.push("accept-provider");
+    this.acceptanceInput = input;
+    this.checkpointInput = input;
+    return {
+      status: "COMMITTED" as const,
+      checkpoint: input.checkpoint,
+      providerRun: input.providerRun,
+      lease: {
+        ...input.lease,
+        jobVersion: input.lease.jobVersion + 1,
         heartbeatAt: T2,
         expiresAt: T4,
       },
@@ -403,10 +452,10 @@ describe("durable research worker", () => {
         await input.checkpoint({
           idempotencyKey: "identity-provider-accepted",
           sequence: 1,
-          kind: "PROVIDER_ACCEPTED",
+          kind: "PROGRESS",
           completedUnits: 0,
           totalUnits: 1,
-          providerRunId: "tmdb-request-1",
+          providerRunId: null,
           resumeTokenFingerprint: null,
           outputFingerprint: null,
         });
@@ -453,10 +502,10 @@ describe("durable research worker", () => {
         const checkpoint = await input.checkpoint({
           idempotencyKey: "identity-provider-replay",
           sequence: 1,
-          kind: "PROVIDER_ACCEPTED",
+          kind: "PROGRESS",
           completedUnits: 0,
           totalUnits: 1,
-          providerRunId: "tmdb-request-1",
+          providerRunId: null,
           resumeTokenFingerprint: null,
           outputFingerprint: null,
         });
@@ -477,6 +526,35 @@ describe("durable research worker", () => {
     expect(execution.disposition).toBe("DEGRADED");
     expect(returnedCheckpointId).toBe(REPLAYED_CHECKPOINT_ID);
     expect(store.calls).toEqual(["claim", "checkpoint", "complete"]);
+  });
+
+  it("rejects provider acceptance through the non-atomic checkpoint path", async () => {
+    const store = new Store();
+    const executor: DurableResearchStageExecutor = {
+      identity: executorIdentity,
+      async execute(input) {
+        await input.checkpoint({
+          idempotencyKey: "unsafe-provider-acceptance",
+          sequence: 1,
+          kind: "PROVIDER_ACCEPTED",
+          completedUnits: 0,
+          totalUnits: 1,
+          providerRunId: "provider-run-without-recovery-state",
+          resumeTokenFingerprint: null,
+          outputFingerprint: null,
+        });
+        throw new Error("unreachable");
+      },
+    };
+
+    const execution = await service(store, executor)(
+      BLACK_HAWK_DOWN_RESEARCH_BUNDLE.run.caseId,
+      command,
+    );
+
+    expect(execution.disposition).toBe("FAILED_TERMINAL");
+    expect(store.calls).toEqual(["claim", "fail"]);
+    expect(store.checkpointInput).toBeNull();
   });
 
   it("aborts work on heartbeat cancellation and never commits stale output or failure", async () => {
@@ -908,16 +986,19 @@ describe("durable research worker", () => {
         executions += 1;
         store.calls.push(`execute-${executions}`);
         if (executions === 1) {
-          await input.checkpoint({
-            idempotencyKey: "provider-accepted-for-handoff",
-            sequence: 1,
-            kind: "PROVIDER_ACCEPTED",
-            completedUnits: 0,
-            totalUnits: 1,
-            providerRunId: "provider-run-same-attempt",
-            resumeTokenFingerprint: null,
-            outputFingerprint: null,
-          });
+          await input.acceptProviderRun(
+            {
+              idempotencyKey: "provider-accepted-for-handoff",
+              sequence: 1,
+              kind: "PROVIDER_ACCEPTED",
+              completedUnits: 0,
+              totalUnits: 1,
+              providerRunId: "provider-run-same-attempt",
+              resumeTokenFingerprint: INPUT_MANIFEST_FINGERPRINT,
+              outputFingerprint: null,
+            },
+            providerRunFor(input, "provider-run-same-attempt"),
+          );
           return {
             status: "FAILED",
             failure: retryableProviderFailure,
@@ -960,6 +1041,9 @@ describe("durable research worker", () => {
     );
     expect(store.completeInput?.lease.attemptId).toBe(ATTEMPT_ID);
     expect(store.completeInput?.lease.leaseEpoch).toBe(2);
+    expect(store.acceptanceInput?.providerRun.traceId).toBe(
+      "trace-provider-run-same-attempt",
+    );
   });
 
   it("accepts the database's terminal fail-closed result when the persisted handoff budget is exhausted", async () => {
@@ -983,16 +1067,19 @@ describe("durable research worker", () => {
         },
       },
       async execute(input) {
-        await input.checkpoint({
-          idempotencyKey: "provider-accepted-before-budget-exhaustion",
-          sequence: 1,
-          kind: "PROVIDER_ACCEPTED",
-          completedUnits: 0,
-          totalUnits: 1,
-          providerRunId: "provider-run-budgeted",
-          resumeTokenFingerprint: null,
-          outputFingerprint: null,
-        });
+        await input.acceptProviderRun(
+          {
+            idempotencyKey: "provider-accepted-before-budget-exhaustion",
+            sequence: 1,
+            kind: "PROVIDER_ACCEPTED",
+            completedUnits: 0,
+            totalUnits: 1,
+            providerRunId: "provider-run-budgeted",
+            resumeTokenFingerprint: INPUT_MANIFEST_FINGERPRINT,
+            outputFingerprint: null,
+          },
+          providerRunFor(input, "provider-run-budgeted"),
+        );
         return {
           status: "FAILED",
           failure: retryableProviderFailure,
@@ -1012,7 +1099,7 @@ describe("durable research worker", () => {
     );
 
     expect(execution.disposition).toBe("FAILED_TERMINAL");
-    expect(store.calls).toEqual(["claim", "checkpoint", "release"]);
+    expect(store.calls).toEqual(["claim", "accept-provider", "release"]);
     expect(store.failureInput).toBeNull();
   });
 

@@ -218,6 +218,9 @@ function executionInput(
     async checkpoint() {
       throw new Error("IDENTITY does not checkpoint provider bodies");
     },
+    async acceptProviderRun() {
+      throw new Error("IDENTITY does not accept provider runs");
+    },
   };
 }
 

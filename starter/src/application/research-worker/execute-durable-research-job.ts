@@ -5,6 +5,7 @@ import {
   type DurableResearchWorkerResult,
 } from "@/contracts/research-worker";
 import type {
+  DurableResearchStageExecutionInput,
   DurableResearchStageExecutorRegistry,
   DurableResearchWorkerStore,
   ResearchRunFingerprintPort,
@@ -13,6 +14,10 @@ import {
   ResearchStageExecutionResultSchema,
   type ResearchStageExecutionResult,
 } from "@/core/research-runs/schemas";
+import {
+  ResearchProviderAcceptanceResultSchema,
+  ResearchProviderRunRecordSchema,
+} from "@/core/research-runs/provider-runs";
 import {
   ClaimedResearchJobSchema,
   ResearchJobCheckpointResultSchema,
@@ -749,6 +754,12 @@ export function createDurableResearchWorkerService(
       const proposal = ResearchWorkerCheckpointProposalSchema.parse(
         proposalInput,
       );
+      if (proposal.kind === "PROVIDER_ACCEPTED") {
+        throw new DurableResearchWorkerError(
+          "CLAIM_REJECTED",
+          "Provider acceptance requires the atomic recovery-state boundary",
+        );
+      }
       return serialize(async () => {
         if (authority !== "ACTIVE" || !acceptingCheckpoints) {
           throw new LeaseAuthorityError(
@@ -820,6 +831,104 @@ export function createDurableResearchWorkerService(
       });
     };
 
+    const acceptProviderRun = async (
+      proposalInput: ResearchWorkerCheckpointProposal,
+      providerRunInput: Parameters<
+        DurableResearchStageExecutionInput["acceptProviderRun"]
+      >[1],
+    ): Promise<ResearchWorkerCheckpointRecord> => {
+      const proposal = ResearchWorkerCheckpointProposalSchema.parse(
+        proposalInput,
+      );
+      const providerRun = ResearchProviderRunRecordSchema.parse(
+        providerRunInput,
+      );
+      if (
+        proposal.kind !== "PROVIDER_ACCEPTED" ||
+        proposal.providerRunId !== providerRun.providerResponseId ||
+        providerRun.runId !== claim.run.id ||
+        providerRun.jobId !== claim.job.id ||
+        providerRun.attemptId !== claim.attempt.id ||
+        providerRun.caseId !== claim.run.caseId ||
+        providerRun.manifestFingerprint !==
+          claim.inputManifest.manifestFingerprint ||
+        providerRun.externalIdempotencyKey !== lease.externalIdempotencyKey
+      ) {
+        throw new DurableResearchWorkerError(
+          "CLAIM_REJECTED",
+          "Provider recovery state does not match the active discovery attempt",
+        );
+      }
+      return serialize(async () => {
+        if (authority !== "ACTIVE" || !acceptingCheckpoints) {
+          throw new LeaseAuthorityError(
+            authority === "ACTIVE" ? "LEASE_LOST" : authority,
+          );
+        }
+        if (proposal.sequence !== checkpointSequence + 1) {
+          throw new DurableResearchWorkerError(
+            "CLAIM_REJECTED",
+            "Executor checkpoints must be contiguous and monotonic",
+          );
+        }
+        const checkpointRecord = ResearchWorkerCheckpointRecordSchema.parse({
+          schemaVersion: 1,
+          id: EntityIdSchema.parse(
+            dependencies.createId("research_checkpoint"),
+          ),
+          runId: claim.run.id,
+          jobId: claim.job.id,
+          attemptId: claim.attempt.id,
+          ...proposal,
+          publicationAuthority: "NONE",
+          createdAt: monotonicNow(dependencies.now, lease.heartbeatAt),
+        });
+        let acceptanceResult;
+        try {
+          acceptanceResult = boundaryParse(
+            ResearchProviderAcceptanceResultSchema,
+            await dependencies.store.acceptResearchProviderRun({
+              actorId,
+              lease,
+              checkpoint: checkpointRecord,
+              providerRun,
+              leaseDurationSeconds: configuration.leaseDurationSeconds,
+            }),
+            "CLAIM_INVALID",
+            "The research store returned an invalid provider acceptance response",
+          );
+        } catch (error) {
+          revoke("LEASE_LOST");
+          if (error instanceof LeaseAuthorityError) throw error;
+          throw new LeaseAuthorityError("LEASE_LOST");
+        }
+        if (
+          acceptanceResult.status === "COMMITTED" ||
+          acceptanceResult.status === "REPLAY"
+        ) {
+          if (
+            !leaseContinues(lease, acceptanceResult.lease) ||
+            !checkpointMatchesProposal(
+              acceptanceResult.checkpoint,
+              proposal,
+              claim,
+            ) ||
+            JSON.stringify(acceptanceResult.providerRun) !==
+              JSON.stringify(providerRun)
+          ) {
+            revoke("LEASE_LOST");
+            throw new LeaseAuthorityError("LEASE_LOST");
+          }
+          lease = acceptanceResult.lease;
+          checkpointSequence = acceptanceResult.checkpoint.sequence;
+          providerCheckpoint = acceptanceResult.checkpoint;
+          return acceptanceResult.checkpoint;
+        }
+        revoke(acceptanceResult.status);
+        throw new LeaseAuthorityError(acceptanceResult.status);
+      });
+    };
+
     const maintenance = (async () => {
       while (authority === "ACTIVE") {
         try {
@@ -860,6 +969,7 @@ export function createDurableResearchWorkerService(
           externalIdempotencyKey: lease.externalIdempotencyKey,
           signal: workAbort.signal,
           checkpoint,
+          acceptProviderRun,
         }),
       )
       .then(

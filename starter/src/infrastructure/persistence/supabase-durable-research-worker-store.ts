@@ -9,6 +9,7 @@ import {
 } from "@/contracts/research-worker";
 import type {
   CheckpointResearchJobInput,
+  AcceptResearchProviderRunInput,
   ClaimResearchJobInput,
   CompleteDurableResearchJobInput,
   DurableResearchWorkerStore,
@@ -16,6 +17,7 @@ import type {
   HeartbeatResearchJobInput,
   ReleaseResearchJobInput,
 } from "@/core/research-runs/ports";
+import { ResearchProviderAcceptanceResultSchema } from "@/core/research-runs/provider-runs";
 import {
   ResearchJobCheckpointResultSchema,
   ResearchJobClaimResultSchema,
@@ -195,6 +197,18 @@ export class SupabaseDurableResearchWorkerStore
       p_lease_seconds: command.leaseDurationSeconds,
     });
     return parseRpcContract(ResearchJobCheckpointResultSchema, data);
+  }
+
+  async acceptResearchProviderRun(input: AcceptResearchProviderRunInput) {
+    this.#assertActor(input.actorId);
+    const data = await this.#rpc("af_accept_research_provider_run_v1", {
+      p_actor_id: this.#actorId,
+      p_lease: input.lease,
+      p_checkpoint: input.checkpoint,
+      p_provider_run: input.providerRun,
+      p_lease_seconds: input.leaseDurationSeconds,
+    });
+    return parseRpcContract(ResearchProviderAcceptanceResultSchema, data);
   }
 
   async completeResearchJob(input: CompleteDurableResearchJobInput) {

@@ -178,6 +178,9 @@ function executionInput(claim: ClaimedResearchJob): DurableResearchStageExecutio
     async checkpoint() {
       throw new Error("Deterministic scoping does not checkpoint");
     },
+    async acceptProviderRun() {
+      throw new Error("Deterministic scoping does not accept provider runs");
+    },
   };
 }
 
