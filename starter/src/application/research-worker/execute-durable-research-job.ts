@@ -313,12 +313,21 @@ function assertStageResultMatches(
   }
 
   const permittedSourceClasses = new Set(claim.plan.plan.sourceClassIds);
+  const permittedAxes = new Map(
+    claim.plan.plan.axes.map((axis) => [axis.axisId, axis]),
+  );
   if (
     result.sourceCandidates.some(
       (candidate) =>
         !permittedSourceClasses.has(candidate.sourceClass) ||
         candidate.discoveryInputFingerprint !==
-          claim.job.stageInputFingerprint,
+          claim.inputManifest.manifestFingerprint ||
+        candidate.axisIds.some(
+          (axisId) =>
+            !permittedAxes
+              .get(axisId)
+              ?.sourceClassIds.includes(candidate.sourceClass),
+        ),
     )
   ) {
     throw new DurableResearchWorkerError(

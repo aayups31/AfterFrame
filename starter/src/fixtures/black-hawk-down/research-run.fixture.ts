@@ -308,6 +308,7 @@ export function blackHawkDownStageResult(
             canonicalUrl: null,
             medium: "OFFICIAL_RECORD",
             sourceClass: fixturePlan.sourceClassIds[0],
+            axisIds: [discoveryAxis.axisId],
             accessState: "UNKNOWN",
             rightsState: "UNKNOWN",
             discoveryInputFingerprint: HASHES.discovery,

@@ -595,6 +595,7 @@ export const SourceCandidateRecordSchema = z
     canonicalUrl: HttpUrlSchema.nullable(),
     medium: SourceMediumSchema,
     sourceClass: SlugSchema,
+    axisIds: z.array(SlugSchema).min(1).max(30),
     accessState: AccessStateSchema,
     rightsState: RightsStateSchema,
     discoveryInputFingerprint: Sha256Schema,
@@ -604,7 +605,16 @@ export const SourceCandidateRecordSchema = z
     publicationAuthority: NoPublicationAuthoritySchema,
     createdAt: IsoDateTimeSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((candidate, context) => {
+    if (new Set(candidate.axisIds).size !== candidate.axisIds.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["axisIds"],
+        message: "Candidate axis IDs must be unique",
+      });
+    }
+  });
 
 /**
  * Hostile source material is represented only by a fingerprint and a
@@ -901,11 +911,17 @@ export const ResearchStageExecutionResultSchema = z
     }
     if (output.stage === "DISCOVERY") {
       const recordIds = new Set(result.sourceCandidates.map(({ id }) => id));
-      if (output.candidateIds.some((id) => !recordIds.has(id))) {
+      if (
+        recordIds.size !== result.sourceCandidates.length ||
+        new Set(output.candidateIds).size !== output.candidateIds.length ||
+        output.candidateIds.length !== recordIds.size ||
+        output.candidateIds.some((id) => !recordIds.has(id))
+      ) {
         context.addIssue({
           code: "custom",
           path: ["output", "candidateIds"],
-          message: "Every discovered candidate ID requires a candidate record",
+          message:
+            "Discovery output IDs and candidate records must be unique and exactly equal",
         });
       }
     }

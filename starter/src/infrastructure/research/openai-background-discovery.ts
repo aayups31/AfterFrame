@@ -3,11 +3,11 @@ import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import {
-  ResearchDiscoveryInputSchema,
-  parseResearchDiscoveryOutputForInput,
-  type ResearchDiscoveryInput,
-  type ResearchDiscoveryOutput,
-} from "@/application/research/discovery-port";
+  DurableResearchDiscoveryInputSchema,
+  parseDurableResearchDiscoveryOutputForInput,
+  type DurableResearchDiscoveryInput,
+  type DurableResearchDiscoveryOutput,
+} from "@/application/research/durable-discovery-port";
 import { ExecutionMetadataSchema } from "@/core/research-runs/schemas";
 import {
   HttpUrlSchema,
@@ -33,7 +33,7 @@ const ProviderHttpUrlSchema = HttpUrlSchema.refine(
 
 const DISCOVERY_INSTRUCTIONS = `You are a bounded source-discovery worker inside AFTERFRAME, an investigation engine.
 
-Your only task is to search for promising original sources for the supplied subject, question, research axis, and requested source classes. You are not answering the question, writing a report, creating evidence, accepting claims, or deciding what the user should conclude.
+Your only task is to search for promising original sources for the supplied subject, question, complete research-axis plan, and requested source classes. You are not answering the question, writing a report, creating evidence, accepting claims, or deciding what the user should conclude.
 
 Rules:
 - Use web search. Do not invent URLs or rely on model memory for a URL.
@@ -41,6 +41,7 @@ Rules:
 - Prefer original, inspectable, credible sources with clear authorship, publication context, editions, dates, speakers, or institutional identity.
 - Seek origin sources and meaningful counterevidence; repeated copies of one account are not independent support.
 - Community material may nominate leads but cannot establish intention, influence, or factual truth.
+- Tag every candidate with each supplied axis it can genuinely help investigate.
 - Return only the requested structured candidate list. Every item remains an unverified lead.`;
 
 const ModelCandidateBatchSchema = z
@@ -52,6 +53,7 @@ const ModelCandidateBatchSchema = z
             url: ProviderHttpUrlSchema,
             title: z.string().trim().min(1).max(1_000),
             sourceClass: SlugSchema,
+            axisIds: z.array(SlugSchema).min(1).max(30),
           })
           .strict(),
       )
@@ -174,8 +176,19 @@ const HandleBindingSchema = z
   .object({
     runId: z.string().uuid(),
     jobId: z.string().uuid(),
+    attemptId: z.string().uuid(),
     caseId: z.string().uuid(),
-    stageInputFingerprint: Sha256Schema,
+    manifestFingerprint: Sha256Schema,
+    externalIdempotencyKey: Sha256Schema,
+  })
+  .strict();
+
+export const OpenAIBackgroundDataControlAttestationSchema = z
+  .object({
+    mode: z.literal("MODIFIED_ABUSE_MONITORING"),
+    projectIdFingerprint: Sha256Schema,
+    attestedAt: IsoDateTimeSchema,
+    attestedBy: OpaqueReferenceSchema,
   })
   .strict();
 
@@ -190,6 +203,8 @@ export const OpenAIBackgroundDiscoveryHandleSchema = z
     startedAt: IsoDateTimeSchema,
     lastObservedAt: IsoDateTimeSchema,
     inputBytes: z.number().int().nonnegative(),
+    dataControlMode: z.literal("MODIFIED_ABUSE_MONITORING"),
+    projectIdFingerprint: Sha256Schema,
     privateContentIncluded: z.literal(true),
   })
   .strict();
@@ -246,7 +261,7 @@ export type OpenAIBackgroundPollResult =
       kind: "COMPLETED";
       state: "COMPLETED";
       handle: OpenAIBackgroundDiscoveryHandle;
-      output: ResearchDiscoveryOutput;
+      output: DurableResearchDiscoveryOutput;
     }>
   | Readonly<{
       kind: "TERMINAL";
@@ -285,6 +300,9 @@ export class OpenAIBackgroundDiscoveryError extends Error {
 export type OpenAIBackgroundDiscoveryOptions = Readonly<{
   model: string;
   transport: OpenAIBackgroundResponsesTransport;
+  dataControlAttestation: z.infer<
+    typeof OpenAIBackgroundDataControlAttestationSchema
+  >;
   reasoningEffort?: "medium" | "high" | "xhigh";
   now?: () => Date;
   createTraceId?: () => string;
@@ -348,7 +366,7 @@ function proposedMedium(value: string) {
   return "WEBPAGE" as const;
 }
 
-function inputForModel(input: ResearchDiscoveryInput) {
+function inputForModel(input: DurableResearchDiscoveryInput) {
   return JSON.stringify(
     {
       subject: {
@@ -358,12 +376,13 @@ function inputForModel(input: ResearchDiscoveryInput) {
         providerReference: input.subjectRef.id,
       },
       exactQuestion: input.exactQuestion,
-      researchAxis: input.axis,
+      researchAxes: input.axes,
       outputRequirements: {
         candidateOnly: true,
         noAnswer: true,
         noEvidenceStatus: true,
-        sourceClassesMustComeFrom: input.axis.sourceClassIds,
+        axisTagsRequired: true,
+        sourceClassesMustComeFrom: input.sourceClassIds,
       },
     },
     null,
@@ -428,15 +447,17 @@ function safeProviderReasonCode(
 
 function handleMatchesInput(
   handle: OpenAIBackgroundDiscoveryHandle,
-  input: ResearchDiscoveryInput,
+  input: DurableResearchDiscoveryInput,
   requestedModel: string,
 ) {
   return (
     handle.requestedModel === requestedModel &&
     handle.binding.runId === input.runId &&
     handle.binding.jobId === input.jobId &&
+    handle.binding.attemptId === input.attemptId &&
     handle.binding.caseId === input.caseId &&
-    handle.binding.stageInputFingerprint === input.stageInputFingerprint
+    handle.binding.manifestFingerprint === input.manifestFingerprint &&
+    handle.binding.externalIdempotencyKey === input.externalIdempotencyKey
   );
 }
 
@@ -453,6 +474,9 @@ export class OpenAIBackgroundResearchDiscoveryProvider {
   readonly #model: string;
   readonly #transport: OpenAIBackgroundResponsesTransport;
   readonly #reasoningEffort: "medium" | "high" | "xhigh";
+  readonly #dataControlAttestation: z.infer<
+    typeof OpenAIBackgroundDataControlAttestationSchema
+  >;
   readonly #now: () => Date;
   readonly #createTraceId: () => string;
 
@@ -465,15 +489,19 @@ export class OpenAIBackgroundResearchDiscoveryProvider {
     this.#model = options.model.trim();
     if (this.#model.length === 0) throw new Error("OpenAI model is required");
     this.#transport = options.transport;
+    this.#dataControlAttestation =
+      OpenAIBackgroundDataControlAttestationSchema.parse(
+        options.dataControlAttestation,
+      );
     this.#reasoningEffort = options.reasoningEffort ?? "high";
     this.#now = options.now ?? (() => new Date());
     this.#createTraceId = options.createTraceId ?? randomUUID;
   }
 
   async start(
-    inputValue: ResearchDiscoveryInput,
+    inputValue: DurableResearchDiscoveryInput,
   ): Promise<OpenAIBackgroundStartResult> {
-    const input = ResearchDiscoveryInputSchema.parse(inputValue);
+    const input = DurableResearchDiscoveryInputSchema.parse(inputValue);
     const startedAt = this.#now();
     const startedAtIso = startedAt.toISOString();
     const traceId = OpaqueReferenceSchema.parse(this.#createTraceId());
@@ -496,6 +524,8 @@ export class OpenAIBackgroundResearchDiscoveryProvider {
           ),
         },
         parallel_tool_calls: true,
+        max_tool_calls: 20,
+        max_output_tokens: 20_000,
         background: true,
         store: false,
         // Stable, body-free correlation only. Metadata is not an idempotency
@@ -503,7 +533,8 @@ export class OpenAIBackgroundResearchDiscoveryProvider {
         metadata: {
           run_id: input.runId,
           job_id: input.jobId,
-          request_fingerprint: input.stageInputFingerprint,
+          attempt_id: input.attemptId,
+          request_fingerprint: input.manifestFingerprint,
         },
       });
     } catch {
@@ -531,12 +562,17 @@ export class OpenAIBackgroundResearchDiscoveryProvider {
       binding: {
         runId: input.runId,
         jobId: input.jobId,
+        attemptId: input.attemptId,
         caseId: input.caseId,
-        stageInputFingerprint: input.stageInputFingerprint,
+        manifestFingerprint: input.manifestFingerprint,
+        externalIdempotencyKey: input.externalIdempotencyKey,
       },
       startedAt: startedAtIso,
       lastObservedAt: observedAt.toISOString(),
       inputBytes,
+      dataControlMode: this.#dataControlAttestation.mode,
+      projectIdFingerprint:
+        this.#dataControlAttestation.projectIdFingerprint,
       // exactQuestion is part of modelInput; false would be untruthful.
       privateContentIncluded: true,
     });
@@ -544,10 +580,10 @@ export class OpenAIBackgroundResearchDiscoveryProvider {
   }
 
   async retrieve(
-    inputValue: ResearchDiscoveryInput,
+    inputValue: DurableResearchDiscoveryInput,
     handleValue: OpenAIBackgroundDiscoveryHandle,
   ): Promise<OpenAIBackgroundPollResult> {
-    const input = ResearchDiscoveryInputSchema.parse(inputValue);
+    const input = DurableResearchDiscoveryInputSchema.parse(inputValue);
     const handle = OpenAIBackgroundDiscoveryHandleSchema.parse(handleValue);
     if (!handleMatchesInput(handle, input, this.#model)) {
       throw new OpenAIBackgroundDiscoveryError(
@@ -641,13 +677,18 @@ export class OpenAIBackgroundResearchDiscoveryProvider {
     }
 
     const actual = actualSearchUrls(outputItems);
-    const permittedSourceClasses = new Set(input.axis.sourceClassIds);
+    const permittedSourceClasses = new Set(input.sourceClassIds);
+    const axes = new Map(input.axes.map((axis) => [axis.axisId, axis]));
     const unique = new Map<
       string,
-      ResearchDiscoveryOutput["candidates"][number]
+      DurableResearchDiscoveryOutput["candidates"][number]
     >();
     for (const proposed of parsedCandidates.candidates) {
       if (!permittedSourceClasses.has(proposed.sourceClass)) continue;
+      const axisIds = [...new Set(proposed.axisIds)].filter((axisId) =>
+        axes.get(axisId)?.sourceClassIds.includes(proposed.sourceClass),
+      );
+      if (axisIds.length === 0) continue;
       const canonicalUrl = canonicalizeCandidateUrl(proposed.url);
       if (canonicalUrl === null || !actual.urls.has(canonicalUrl)) continue;
       const candidateKey = `sha256:${sha256(
@@ -659,9 +700,10 @@ export class OpenAIBackgroundResearchDiscoveryProvider {
         canonicalUrl,
         medium: proposedMedium(canonicalUrl),
         sourceClass: proposed.sourceClass,
+        axisIds,
         accessState: "UNKNOWN",
         rightsState: "UNKNOWN",
-        discoveryInputFingerprint: input.stageInputFingerprint,
+        discoveryInputFingerprint: input.manifestFingerprint,
         contentTrust: "UNTRUSTED",
         evidenceStatus: "NOT_EVIDENCE",
         reviewState: "PROPOSED",
@@ -687,7 +729,7 @@ export class OpenAIBackgroundResearchDiscoveryProvider {
         id: OUTPUT_SCHEMA_ID,
         version: OUTPUT_SCHEMA_VERSION,
         schemaFingerprint: sha256(
-          "candidates[url,title,sourceClass]@afterframe-v1",
+          "candidates[url,title,sourceClass,axisIds]@afterframe-v2",
         ),
       },
       tool: { id: TOOL_ID, version: TOOL_VERSION },
@@ -712,10 +754,11 @@ export class OpenAIBackgroundResearchDiscoveryProvider {
         { recordType: "CASE", recordId: input.caseId },
         { recordType: "RUN", recordId: input.runId },
         { recordType: "JOB", recordId: input.jobId },
+        { recordType: "ATTEMPT", recordId: input.attemptId },
       ],
       privateContentIncluded: true,
     });
-    const output = parseResearchDiscoveryOutputForInput(input, {
+    const output = parseDurableResearchDiscoveryOutputForInput(input, {
       candidates: [...unique.values()],
       execution,
     });
@@ -723,10 +766,10 @@ export class OpenAIBackgroundResearchDiscoveryProvider {
   }
 
   async cancel(
-    inputValue: ResearchDiscoveryInput,
+    inputValue: DurableResearchDiscoveryInput,
     handleValue: OpenAIBackgroundDiscoveryHandle,
   ): Promise<OpenAIBackgroundCancellationResult> {
-    const input = ResearchDiscoveryInputSchema.parse(inputValue);
+    const input = DurableResearchDiscoveryInputSchema.parse(inputValue);
     const handle = OpenAIBackgroundDiscoveryHandleSchema.parse(handleValue);
     if (!handleMatchesInput(handle, input, this.#model)) {
       throw new OpenAIBackgroundDiscoveryError(
@@ -768,11 +811,15 @@ export class OpenAIBackgroundResearchDiscoveryProvider {
 export function createOpenAIBackgroundResearchDiscoveryProvider(input: {
   apiKey: string;
   model: string;
+  dataControlAttestation: z.infer<
+    typeof OpenAIBackgroundDataControlAttestationSchema
+  >;
   reasoningEffort?: "medium" | "high" | "xhigh";
 }): OpenAIBackgroundResearchDiscoveryProvider {
   const client = new OpenAI({ apiKey: input.apiKey, timeout: 30 * 60 * 1_000 });
   return new OpenAIBackgroundResearchDiscoveryProvider({
     model: input.model,
+    dataControlAttestation: input.dataControlAttestation,
     reasoningEffort: input.reasoningEffort,
     transport: {
       start: (body) => client.responses.create(body as never),

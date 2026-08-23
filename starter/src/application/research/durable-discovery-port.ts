@@ -1,0 +1,232 @@
+import { z } from "zod";
+import { SpecialistSubjectRefSchema } from "@/core/cases/schemas";
+import { SpecialistResearchAxisPlanSchema } from "@/core/ports/investigation-specialist";
+import {
+  AccessStateSchema,
+  RightsStateSchema,
+  SourceMediumSchema,
+} from "@/core/research/schemas";
+import { ResolvedPublicSubjectIdentitySchema } from "@/core/research/subject-identity";
+import {
+  ExecutionMetadataSchema,
+  NoPublicationAuthoritySchema,
+} from "@/core/research-runs/schemas";
+import {
+  EntityIdSchema,
+  HttpUrlSchema,
+  OpaqueReferenceSchema,
+  Sha256Schema,
+  SlugSchema,
+} from "@/core/shared/schemas";
+
+const ExactPrivateQuestionSchema = z
+  .string()
+  .min(3)
+  .max(4_000)
+  .refine((value) => value.trim().length >= 3, {
+    message: "The exact question must contain at least three non-whitespace characters",
+  });
+
+export const DurableResearchDiscoveryContextSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    runId: EntityIdSchema,
+    jobId: EntityIdSchema,
+    caseId: EntityIdSchema,
+    subjectRef: SpecialistSubjectRefSchema,
+    publicSubjectIdentity: ResolvedPublicSubjectIdentitySchema,
+    exactQuestion: ExactPrivateQuestionSchema,
+    axes: z.array(SpecialistResearchAxisPlanSchema).min(1).max(30),
+    sourceClassIds: z.array(SlugSchema).min(1).max(30),
+  })
+  .strict();
+
+export const DurableResearchDiscoveryInputSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    runId: EntityIdSchema,
+    jobId: EntityIdSchema,
+    attemptId: EntityIdSchema,
+    caseId: EntityIdSchema,
+    manifestFingerprint: Sha256Schema,
+    externalIdempotencyKey: Sha256Schema,
+    subjectRef: SpecialistSubjectRefSchema,
+    publicSubjectIdentity: ResolvedPublicSubjectIdentitySchema,
+    exactQuestion: ExactPrivateQuestionSchema,
+    axes: z.array(SpecialistResearchAxisPlanSchema).min(1).max(30),
+    sourceClassIds: z.array(SlugSchema).min(1).max(30),
+  })
+  .strict()
+  .superRefine((input, context) => {
+    const axisIds = new Set<string>();
+    const permittedSourceClasses = new Set(input.sourceClassIds);
+    if (permittedSourceClasses.size !== input.sourceClassIds.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["sourceClassIds"],
+        message: "Discovery source-class IDs must be unique",
+      });
+    }
+    input.axes.forEach((axis, axisIndex) => {
+      if (axisIds.has(axis.axisId)) {
+        context.addIssue({
+          code: "custom",
+          path: ["axes", axisIndex, "axisId"],
+          message: "Discovery axis IDs must be unique",
+        });
+      }
+      axisIds.add(axis.axisId);
+      if (new Set(axis.sourceClassIds).size !== axis.sourceClassIds.length) {
+        context.addIssue({
+          code: "custom",
+          path: ["axes", axisIndex, "sourceClassIds"],
+          message: "Axis source-class IDs must be unique",
+        });
+      }
+      axis.sourceClassIds.forEach((sourceClassId, sourceClassIndex) => {
+        if (!permittedSourceClasses.has(sourceClassId)) {
+          context.addIssue({
+            code: "custom",
+            path: ["axes", axisIndex, "sourceClassIds", sourceClassIndex],
+            message: "Axis source classes must come from the pinned scope",
+          });
+        }
+      });
+    });
+    const selectedSourceClasses = new Set(
+      input.axes.flatMap(({ sourceClassIds }) => sourceClassIds),
+    );
+    if (
+      selectedSourceClasses.size !== permittedSourceClasses.size ||
+      [...selectedSourceClasses].some(
+        (sourceClassId) => !permittedSourceClasses.has(sourceClassId),
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["sourceClassIds"],
+        message:
+          "The multi-axis discovery request must cover exactly the pinned source-class scope",
+      });
+    }
+  });
+
+export const AxisTaggedSourceCandidateProposalSchema = z
+  .object({
+    candidateKey: OpaqueReferenceSchema,
+    title: z.string().trim().min(1).max(1_000),
+    canonicalUrl: HttpUrlSchema,
+    medium: SourceMediumSchema,
+    sourceClass: SlugSchema,
+    axisIds: z.array(SlugSchema).min(1).max(30),
+    accessState: AccessStateSchema,
+    rightsState: RightsStateSchema,
+    discoveryInputFingerprint: Sha256Schema,
+    contentTrust: z.literal("UNTRUSTED"),
+    evidenceStatus: z.literal("NOT_EVIDENCE"),
+    reviewState: z.literal("PROPOSED"),
+    publicationAuthority: NoPublicationAuthoritySchema,
+  })
+  .strict()
+  .superRefine((candidate, context) => {
+    if (new Set(candidate.axisIds).size !== candidate.axisIds.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["axisIds"],
+        message: "Candidate axis IDs must be unique",
+      });
+    }
+  });
+
+export const DurableResearchDiscoveryOutputSchema = z
+  .object({
+    candidates: z.array(AxisTaggedSourceCandidateProposalSchema).max(500),
+    execution: ExecutionMetadataSchema,
+  })
+  .strict()
+  .superRefine((output, context) => {
+    if (
+      output.execution.executionKind !== "MODEL_TOOL" ||
+      output.execution.telemetryState !== "COMPLETE" ||
+      output.execution.latencyMs === null
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["execution"],
+        message:
+          "Completed durable discovery requires complete model-and-tool execution metadata",
+      });
+    }
+    const keys = new Set<string>();
+    output.candidates.forEach((candidate, candidateIndex) => {
+      if (keys.has(candidate.candidateKey)) {
+        context.addIssue({
+          code: "custom",
+          path: ["candidates", candidateIndex, "candidateKey"],
+          message: "Candidate keys must be unique",
+        });
+      }
+      keys.add(candidate.candidateKey);
+    });
+  });
+
+/** Validates the provider result against the exact Postgres-authored attempt. */
+export function parseDurableResearchDiscoveryOutputForInput(
+  inputValue: unknown,
+  outputValue: unknown,
+) {
+  const input = DurableResearchDiscoveryInputSchema.parse(inputValue);
+  const output = DurableResearchDiscoveryOutputSchema.parse(outputValue);
+  const axes = new Map(input.axes.map((axis) => [axis.axisId, axis]));
+  const policyMismatch = output.candidates.some((candidate) => {
+    if (candidate.discoveryInputFingerprint !== input.manifestFingerprint) {
+      return true;
+    }
+    return candidate.axisIds.some((axisId) => {
+      const axis = axes.get(axisId);
+      return axis === undefined || !axis.sourceClassIds.includes(candidate.sourceClass);
+    });
+  });
+  if (policyMismatch) {
+    throw new z.ZodError([
+      {
+        code: "custom",
+        path: ["candidates"],
+        message:
+          "Every candidate must bind the exact manifest and an axis that permits its source class",
+      },
+    ]);
+  }
+  return output;
+}
+
+export type DurableResearchDiscoveryInput = z.infer<
+  typeof DurableResearchDiscoveryInputSchema
+>;
+export type DurableResearchDiscoveryContext = z.infer<
+  typeof DurableResearchDiscoveryContextSchema
+>;
+export type AxisTaggedSourceCandidateProposal = z.infer<
+  typeof AxisTaggedSourceCandidateProposalSchema
+>;
+export type DurableResearchDiscoveryOutput = z.infer<
+  typeof DurableResearchDiscoveryOutputSchema
+>;
+
+export interface DurableResearchDiscoveryProvider {
+  start(input: DurableResearchDiscoveryInput): Promise<unknown>;
+  retrieve(input: DurableResearchDiscoveryInput, handle: unknown): Promise<unknown>;
+  cancel(input: DurableResearchDiscoveryInput, handle: unknown): Promise<unknown>;
+}
+
+/**
+ * The exact private question is released only through this actor-scoped,
+ * server-side worker boundary. Implementations must never log or cache it.
+ */
+export interface DurableResearchDiscoveryContextReader {
+  getDiscoveryContext(input: Readonly<{
+    actorId: string;
+    runId: string;
+    jobId: string;
+  }>): Promise<DurableResearchDiscoveryContext | null>;
+}

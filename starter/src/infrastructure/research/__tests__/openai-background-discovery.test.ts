@@ -1,16 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
-import { ResearchDiscoveryInputSchema } from "@/application/research/discovery-port";
+import { DurableResearchDiscoveryInputSchema } from "@/application/research/durable-discovery-port";
 import {
   OpenAIBackgroundDiscoveryError,
   OpenAIBackgroundResearchDiscoveryProvider,
   type OpenAIBackgroundResponsesTransport,
 } from "@/infrastructure/research/openai-background-discovery";
 
-const input = ResearchDiscoveryInputSchema.parse({
+const input = DurableResearchDiscoveryInputSchema.parse({
+  schemaVersion: 1,
   runId: "30000000-0000-4000-8000-000000000001",
   jobId: "30000000-0000-4000-8000-000000000002",
+  attemptId: "30000000-0000-4000-8000-000000000004",
   caseId: "30000000-0000-4000-8000-000000000003",
-  stageInputFingerprint: "c".repeat(64),
+  manifestFingerprint: "c".repeat(64),
+  externalIdempotencyKey: "d".repeat(64),
   subjectRef: { type: "film", id: "tmdb:movie:278", versionId: null },
   publicSubjectIdentity: {
     displayName: "The Shawshank Redemption",
@@ -26,11 +29,17 @@ const input = ResearchDiscoveryInputSchema.parse({
     resolvedAt: "2026-08-09T12:00:00.000Z",
   },
   exactQuestion: "How did the adaptation reshape the ending?",
-  axis: {
-    axisId: "adaptation-source",
-    objective: "Compare the finished film with its source and screenplay history.",
-    sourceClassIds: ["books", "articles-trades", "video-podcasts"],
-  },
+  axes: [
+    {
+      axisId: "adaptation-source",
+      objective:
+        "Compare the finished film with its source and screenplay history.",
+      sourceClassIds: ["books", "articles-trades", "video-podcasts"],
+      adversarialQuestion:
+        "What evidence would contradict the assumed adaptation path?",
+    },
+  ],
+  sourceClassIds: ["books", "articles-trades", "video-podcasts"],
 });
 
 function providerResponse(
@@ -66,16 +75,19 @@ function completedResponse() {
         url: "https://example.com/interview?utm_source=search#answer",
         title: "Model-proposed title",
         sourceClass: "articles-trades",
+        axisIds: ["adaptation-source"],
       },
       {
         url: "https://hallucinated.example/not-in-search",
         title: "Hallucinated URL",
         sourceClass: "books",
+        axisIds: ["adaptation-source"],
       },
       {
         url: "https://example.com/wrong-policy",
         title: "Wrong policy class",
         sourceClass: "community",
+        axisIds: ["adaptation-source"],
       },
     ],
   };
@@ -174,6 +186,12 @@ function createProvider(
   return new OpenAIBackgroundResearchDiscoveryProvider({
     model: "gpt-5.6-sol",
     transport,
+    dataControlAttestation: {
+      mode: "MODIFIED_ABUSE_MONITORING",
+      projectIdFingerprint: "f".repeat(64),
+      attestedAt: "2026-08-09T11:00:00.000Z",
+      attestedBy: "afterframe-operator",
+    },
     now,
     createTraceId: () => "trace-background-1",
   });
@@ -199,9 +217,12 @@ describe("OpenAI background research discovery", () => {
         binding: {
           runId: input.runId,
           jobId: input.jobId,
+          attemptId: input.attemptId,
           caseId: input.caseId,
-          stageInputFingerprint: input.stageInputFingerprint,
+          manifestFingerprint: input.manifestFingerprint,
+          externalIdempotencyKey: input.externalIdempotencyKey,
         },
+        dataControlMode: "MODIFIED_ABUSE_MONITORING",
       },
     });
     expect(JSON.stringify(result)).not.toContain(input.exactQuestion);
@@ -216,7 +237,8 @@ describe("OpenAI background research discovery", () => {
         metadata: {
           run_id: input.runId,
           job_id: input.jobId,
-          request_fingerprint: input.stageInputFingerprint,
+          attempt_id: input.attemptId,
+          request_fingerprint: input.manifestFingerprint,
         },
       }),
     );
@@ -274,13 +296,14 @@ describe("OpenAI background research discovery", () => {
       title: "Resolved citation title",
       canonicalUrl: "https://example.com/interview",
       sourceClass: "articles-trades",
+      axisIds: ["adaptation-source"],
       accessState: "UNKNOWN",
       rightsState: "UNKNOWN",
       contentTrust: "UNTRUSTED",
       evidenceStatus: "NOT_EVIDENCE",
       reviewState: "PROPOSED",
       publicationAuthority: "NONE",
-      discoveryInputFingerprint: input.stageInputFingerprint,
+      discoveryInputFingerprint: input.manifestFingerprint,
     });
     expect(result.output.execution).toMatchObject({
       executionKind: "MODEL_TOOL",
@@ -352,6 +375,7 @@ describe("OpenAI background research discovery", () => {
               url: "https://example.com/partial",
               title: "Must not escape",
               sourceClass: "books",
+              axisIds: ["adaptation-source"],
             },
           ],
         }),
