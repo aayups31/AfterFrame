@@ -7,7 +7,7 @@ AFTERFRAME begins with the world's best Movie Investigator and is architected to
 
 ## Read this first
 
-Start with `START_HERE.md`, then `WHY.md`, then the canonical plan in `docs/23-final-build-plan.md`. The completed identity cutover is recorded in `docs/47-build-checkpoint-04a.md`; active Checkpoint 04B work begins in `docs/48-build-checkpoint-04b.md` and its latest completed slice is `docs/57-build-checkpoint-04b-deterministic-postgres-discovery-lifecycle.md`.
+Start with `START_HERE.md`, then `WHY.md`, then the canonical plan in `docs/23-final-build-plan.md`. The completed identity cutover is recorded in `docs/47-build-checkpoint-04a.md`; active research-pipeline work begins in `docs/48-build-checkpoint-04b.md` and its latest completed slice is `docs/58-build-checkpoint-04c-source-resolution-boundary.md`.
 
 The prototypes, starter UI, diagrams, and visual specifications are non-authoritative vision artifacts. They are useful for atmosphere and hypotheses, but production should not copy their interface or let their feature set define scope.
 
@@ -68,7 +68,7 @@ npm run dev
 
 Visit `http://localhost:3000`.
 
-The starter UI remains a non-binding mock. Migrations 001–012 and the authenticated Postgres worker lifecycle are deployed. The real Supabase/TMDB path completes resolver-verified `IDENTITY` and deterministic `SCOPING`; a deterministic provider transport now proves `DISCOVERY` start, atomic acceptance, pending handoff, same-attempt takeover, validation, and axis-tagged candidate persistence end to end. The current environment does not claim MAM and no paid live call is enabled. The next gate is candidate resolution; the public production research route remains disabled until source/locator validation, evidence and claim persistence, corroboration, sequencing, provenance, and domain eval gates pass.
+The starter UI remains a non-binding mock. Migrations 001–012 and the authenticated Postgres worker lifecycle are deployed. The real Supabase/TMDB path completes resolver-verified `IDENTITY` and deterministic `SCOPING`; a deterministic provider transport proves `DISCOVERY` start, atomic acceptance, pending handoff, same-attempt takeover, validation, and axis-tagged candidate persistence end to end. Candidate resolution now has a strict public-network and body-free metadata boundary that can propose a conservative source identity and source-level locator without granting evidence authority. The next gate is Postgres resolution persistence and worker integration. The current environment does not claim MAM and no paid live call is enabled. The public production research route remains disabled until exact locator validation, evidence and claim persistence, corroboration, sequencing, provenance, and domain eval gates pass.
 
 ### 3. Start Codex with GPT-5.6 Sol
 
