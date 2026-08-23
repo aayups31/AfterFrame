@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createIdentityResearchStageExecutor } from "@/application/research-worker/executors/identity-research-stage-executor";
+import { createScopingResearchStageExecutor } from "@/application/research-worker/executors/scoping-research-stage-executor";
 import type {
   DurableResearchStageExecutor,
   DurableResearchStageExecutorRegistry,
@@ -45,17 +46,47 @@ export function afterFrameV1IdentityExecutionPlan(
   });
 }
 
+export function afterFrameV1ScopingExecutionPlan() {
+  return ResearchWorkerExecutionPlanSchema.parse({
+    executorId: "scoping-stage-executor",
+    executorVersion: "1.0.0",
+    configurationFingerprint: sha256(
+      "afterframe:scoping-stage-executor:movie-investigator@0.1.0:v1",
+    ),
+    executionKind: "DETERMINISTIC",
+    model: null,
+    prompt: null,
+    schema: {
+      id: "scoping-stage-result",
+      version: "1.0.0",
+      schemaFingerprint: sha256(
+        "afterframe:scoping-stage-result:axes-source-classes-coverage-gaps:v1",
+      ),
+    },
+    tool: null,
+    privateContentIncluded: false,
+    automaticRetrySafety: "IDEMPOTENT_PROVIDER_REQUEST",
+  });
+}
+
 export class AfterFrameV1ResearchExecutorRegistry
   implements DurableResearchStageExecutorRegistry
 {
   readonly #identityExecutor: DurableResearchStageExecutor;
+  readonly #scopingExecutor: DurableResearchStageExecutor;
 
-  constructor(identityExecutor: DurableResearchStageExecutor) {
+  constructor(
+    identityExecutor: DurableResearchStageExecutor,
+    scopingExecutor: DurableResearchStageExecutor,
+  ) {
     this.#identityExecutor = identityExecutor;
+    this.#scopingExecutor = scopingExecutor;
   }
 
   resolve(stage: Parameters<DurableResearchStageExecutorRegistry["resolve"]>[0]) {
-    return stage === "IDENTITY" ? this.#identityExecutor : null;
+    if (stage === "IDENTITY") return this.#identityExecutor;
+    if (stage === "SCOPING") return this.#scopingExecutor;
+    return null;
   }
 }
 
@@ -70,8 +101,9 @@ export type AfterFrameV1ResearchExecutorRegistryOptions = Readonly<{
 }>;
 
 /**
- * V1 production composition deliberately registers only Movie IDENTITY.
- * Discovery and every factual downstream stage remain disabled here.
+ * V1 production composition registers resolver-backed IDENTITY and the
+ * deterministic SCOPING projection. Discovery and every factual downstream
+ * stage remain disabled here.
  */
 export function createAfterFrameV1ResearchExecutorRegistry(
   options: AfterFrameV1ResearchExecutorRegistryOptions,
@@ -100,5 +132,11 @@ export function createAfterFrameV1ResearchExecutorRegistry(
     createId: () => createId(),
     now: () => now().toISOString(),
   });
-  return new AfterFrameV1ResearchExecutorRegistry(identityExecutor);
+  const scopingExecutor = createScopingResearchStageExecutor({
+    execution: afterFrameV1ScopingExecutionPlan(),
+  });
+  return new AfterFrameV1ResearchExecutorRegistry(
+    identityExecutor,
+    scopingExecutor,
+  );
 }

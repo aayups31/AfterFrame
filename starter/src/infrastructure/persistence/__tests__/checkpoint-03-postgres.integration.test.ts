@@ -6,10 +6,7 @@ import { createDurableResearchWorkerService } from "@/application/research-worke
 import { createStartResearchRunService } from "@/application/research/start-research-run";
 import type { InvestigationBranch } from "@/core/branches/schemas";
 import type { InvestigationCase } from "@/core/cases/schemas";
-import type {
-  ClaimResearchJobInput,
-  ResearchRunFingerprintPort,
-} from "@/core/research-runs/ports";
+import type { ResearchRunFingerprintPort } from "@/core/research-runs/ports";
 import { ResearchStageExecutionResultSchema } from "@/core/research-runs/schemas";
 import {
   BLACK_HAWK_DOWN_CASE,
@@ -25,6 +22,7 @@ import { SupabaseResearchRunStartStore } from "@/infrastructure/persistence/supa
 import { SupabaseResearchIdentityReader } from "@/infrastructure/persistence/supabase-research-identity-reader";
 import {
   afterFrameV1IdentityExecutionPlan,
+  afterFrameV1ScopingExecutionPlan,
   createAfterFrameV1ResearchExecutorRegistry,
 } from "@/infrastructure/research/afterframe-v1-research-executor-registry";
 import { afterFrameV1SpecialistRegistry } from "@/specialists/registry";
@@ -229,18 +227,6 @@ async function databaseTimestamp(client: Client, offsetMilliseconds = 25) {
   }
   const timestamp = value instanceof Date ? value : new Date(value);
   return new Date(timestamp.getTime() + offsetMilliseconds).toISOString();
-}
-
-async function waitForRetry(client: Client, retryAt: string) {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    const result = await client.query<{ ready: boolean }>(
-      "select clock_timestamp() >= $1::timestamptz as ready",
-      [retryAt],
-    );
-    if (result.rows[0]?.ready === true) return;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  throw new Error("The bounded research retry did not become claimable");
 }
 
 function sha256(value: string) {
@@ -780,7 +766,7 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
           expect(registry.resolve("IDENTITY")?.identity.execution).toEqual(
             afterFrameV1IdentityExecutionPlan(20_000),
           );
-          const executeIdentity = createDurableResearchWorkerService({
+          const executeResearchJob = createDurableResearchWorkerService({
             store: workerStore,
             executors: registry,
             fingerprints,
@@ -790,7 +776,7 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
             createId: () => randomUUID(),
             now: () => new Date().toISOString(),
           });
-          const identityExecution = await executeIdentity(actorId, {
+          const identityExecution = await executeResearchJob(actorId, {
             runId: started.bundle.run.id,
             jobId: identityJob.id,
             stage: "IDENTITY",
@@ -886,48 +872,58 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
             throw new Error("Identity completion did not expose SCOPING");
           }
           expect(scopingState.job_status).toBe("QUEUED");
-          const scopingExecutionPlan = {
-            executorId: "checkpoint-04a-scoping-manifest-probe",
-            executorVersion: "1.0.0",
-            configurationFingerprint: sha256(
-              "checkpoint-04a-scoping-manifest-probe",
-            ),
-            executionKind: "TOOL" as const,
-            model: null,
-            prompt: null,
-            schema: {
-              id: "scoping-manifest-probe",
-              version: "1.0.0",
-              schemaFingerprint: sha256(
-                "checkpoint-04a-scoping-manifest-probe-schema",
-              ),
-            },
-            tool: { id: "scoping-provider-probe", version: "1.0.0" },
-            privateContentIncluded: false,
-            automaticRetrySafety: "RESUMABLE_PROVIDER_RUN" as const,
-          };
-          const scopingAttemptId = randomUUID();
-          const scopingClaimInput = {
-            actorId,
+          expect(registry.resolve("SCOPING")?.identity.execution).toEqual(
+            afterFrameV1ScopingExecutionPlan(),
+          );
+          const scopingExecution = await executeResearchJob(actorId, {
             runId: started.bundle.run.id,
             jobId: scopingState.job_id,
-            stage: "SCOPING" as const,
+            stage: "SCOPING",
             expectedRunVersion: Number(scopingState.run_version),
             expectedJobVersion: Number(scopingState.job_version),
             idempotencyKey: "checkpoint-04a:generic-movie:scoping:v1",
-            attemptId: scopingAttemptId,
-            workerId: "checkpoint-04a-scoping-probe",
-            execution: scopingExecutionPlan,
-            leaseDurationSeconds: 60,
-          } satisfies ClaimResearchJobInput;
-          const scopingClaim = await workerStore.claimResearchJob(
-            scopingClaimInput,
+          });
+          expect(["SUCCEEDED", "DEGRADED"]).toContain(
+            scopingExecution.disposition,
           );
-          expect(scopingClaim.status).toBe("CLAIMED");
-          if (scopingClaim.status !== "CLAIMED") {
-            throw new Error("SCOPING did not receive a causal claim");
+
+          const scopingRows = await client.query<{
+            manifest: unknown;
+            kind: string;
+            stage: string;
+            axis_ids: string[];
+            source_class_ids: string[];
+            coverage_gap_codes: string[];
+            output_count: string;
+            candidate_count: string;
+            discovery_status: string;
+          }>(
+            `select manifest.manifest,
+               output.kind::text as kind,
+               output.stage::text as stage,
+               output.axis_ids,
+               output.source_class_ids,
+               output.coverage_gap_codes,
+               (select count(*)::text from public.af_research_stage_outputs
+                 where run_id = $1 and stage = 'SCOPING') as output_count,
+               (select count(*)::text from public.af_source_candidates
+                 where run_id = $1) as candidate_count,
+               (select status::text from public.af_research_jobs
+                 where run_id = $1 and stage = 'DISCOVERY') as discovery_status
+             from public.af_research_attempt_input_manifests manifest
+             join public.af_research_stage_outputs output
+               on output.run_id = manifest.run_id
+              and output.job_id = manifest.job_id
+              and output.attempt_id = manifest.attempt_id
+             where manifest.run_id = $1 and manifest.stage = 'SCOPING'`,
+            [started.bundle.run.id],
+          );
+          expect(scopingRows.rows).toHaveLength(1);
+          const scopingRow = scopingRows.rows[0];
+          if (scopingRow === undefined) {
+            throw new Error("SCOPING did not persist its deterministic output");
           }
-          expect(scopingClaim.claim.inputManifest.manifest).toMatchObject({
+          expect(scopingRow.manifest).toMatchObject({
             stage: "SCOPING",
             dependency: {
               state: "BOUND",
@@ -942,94 +938,24 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
               identityFingerprint: identityRow.identity_fingerprint,
             },
           });
-          const serializedManifest = JSON.stringify(
-            scopingClaim.claim.inputManifest,
+          expect(scopingRow).toMatchObject({
+            kind: "SCOPE_RESULT",
+            stage: "SCOPING",
+            axis_ids: started.bundle.plan.plan.axes.map(({ axisId }) => axisId),
+            source_class_ids: started.bundle.plan.plan.sourceClassIds,
+          });
+          expect(scopingRow.coverage_gap_codes).toEqual(
+            started.bundle.plan.plan.coverageGaps.length === 0
+              ? []
+              : ["specialist-plan-coverage-gaps"],
           );
+          expect(scopingRow.output_count).toBe("1");
+          expect(scopingRow.candidate_count).toBe("0");
+          expect(scopingRow.discovery_status).toBe("QUEUED");
+          const serializedManifest = JSON.stringify(scopingRow.manifest);
           expect(serializedManifest).not.toContain(exactCuriosity);
           expect(serializedManifest).not.toContain(
             resolvedIdentity?.publicIdentity.displayName ?? "unreachable-name",
-          );
-          expect(scopingClaim.claim.attempt.requestFingerprint).toBe(
-            scopingClaim.claim.lease.externalIdempotencyKey,
-          );
-
-          const scopingProviderRunId = "checkpoint-04a-scoping-provider-run";
-          const scopingCheckpoint = await workerStore.checkpointResearchJob({
-            actorId,
-            lease: scopingClaim.claim.lease,
-            checkpoint: {
-              schemaVersion: 1,
-              id: randomUUID(),
-              runId: started.bundle.run.id,
-              jobId: scopingState.job_id,
-              attemptId: scopingAttemptId,
-              idempotencyKey: "checkpoint-04a:scoping:provider-accepted:v1",
-              sequence: 1,
-              kind: "PROVIDER_ACCEPTED",
-              completedUnits: 0,
-              totalUnits: 1,
-              providerRunId: scopingProviderRunId,
-              resumeTokenFingerprint: sha256(
-                "checkpoint-04a-scoping-resume-token",
-              ),
-              outputFingerprint: null,
-              publicationAuthority: "NONE",
-              createdAt: await databaseTimestamp(client),
-            },
-            leaseDurationSeconds: 60,
-          });
-          expect(scopingCheckpoint.status).toBe("COMMITTED");
-          if (scopingCheckpoint.status !== "COMMITTED") {
-            throw new Error("SCOPING provider checkpoint was not committed");
-          }
-          const scopingRelease = await workerStore.releaseResearchJob({
-            actorId,
-            lease: scopingCheckpoint.lease,
-            idempotencyKey: "checkpoint-04a:scoping:release:v1",
-            failure: {
-              schemaVersion: 1,
-              code: "provider-timeout",
-              category: "TIMEOUT",
-              phase: "EXTERNAL_CALL",
-              retryDirective: "RETRY_WITH_BACKOFF",
-              retryAfterMs: 100,
-              providerStatusCode: null,
-              diagnosticFingerprint: sha256(
-                "checkpoint-04a-scoping-timeout",
-              ),
-              redactionState: "BODY_FREE",
-            },
-            execution: {
-              telemetryState: "PARTIAL",
-              providerRunId: scopingProviderRunId,
-              usage: null,
-              cost: null,
-              latencyMs: 100,
-              completedAt: await databaseTimestamp(client),
-            },
-          });
-          expect(scopingRelease.status).toBe("RELEASED");
-          if (scopingRelease.status !== "RELEASED") {
-            throw new Error("SCOPING attempt was not released for resume");
-          }
-          await waitForRetry(client, scopingRelease.retryAt);
-          const scopingReclaim = await workerStore.claimResearchJob({
-            ...scopingClaimInput,
-            workerId: "checkpoint-04a-scoping-reclaimer",
-          });
-          expect(scopingReclaim.status).toBe("CLAIMED");
-          if (scopingReclaim.status !== "CLAIMED") {
-            throw new Error("SCOPING attempt was not durably reclaimed");
-          }
-          expect(scopingReclaim.claim.attempt.id).toBe(scopingAttemptId);
-          expect(scopingReclaim.claim.lease.leaseEpoch).toBe(
-            scopingClaim.claim.lease.leaseEpoch + 1,
-          );
-          expect(scopingReclaim.claim.providerCheckpoint).toEqual(
-            scopingCheckpoint.checkpoint,
-          );
-          expect(scopingReclaim.claim.inputManifest).toEqual(
-            scopingClaim.claim.inputManifest,
           );
 
           const durableCounts = await client.query<{
@@ -1063,11 +989,11 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
           );
           expect(durableCounts.rows[0]).toEqual({
             attempts: "2",
-            checkpoints: "1",
-            handoffs: "1",
+            checkpoints: "0",
+            handoffs: "0",
             identities: "1",
             manifests: "2",
-            outputs: "1",
+            outputs: "2",
           });
 
           throw rollbackSentinel;
