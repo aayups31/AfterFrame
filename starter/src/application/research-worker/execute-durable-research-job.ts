@@ -17,6 +17,7 @@ import {
 import {
   ResearchProviderAcceptanceResultSchema,
   ResearchProviderRunRecordSchema,
+  type ResearchProviderRunRecord,
 } from "@/core/research-runs/provider-runs";
 import {
   ClaimedResearchJobSchema,
@@ -243,6 +244,22 @@ function checkpointMatchesProposal(
     checkpoint.providerRunId === proposal.providerRunId &&
     checkpoint.resumeTokenFingerprint === proposal.resumeTokenFingerprint &&
     checkpoint.outputFingerprint === proposal.outputFingerprint
+  );
+}
+
+function providerRunMatches(
+  returned: ResearchProviderRunRecord,
+  proposed: ResearchProviderRunRecord,
+) {
+  const canonicalizeTimestamps = (record: ResearchProviderRunRecord) => ({
+    ...record,
+    startedAt: new Date(record.startedAt).toISOString(),
+    acceptedAt: new Date(record.acceptedAt).toISOString(),
+    lastObservedAt: new Date(record.lastObservedAt).toISOString(),
+  });
+  return (
+    JSON.stringify(canonicalizeTimestamps(returned)) ===
+    JSON.stringify(canonicalizeTimestamps(proposed))
   );
 }
 
@@ -913,8 +930,7 @@ export function createDurableResearchWorkerService(
               proposal,
               claim,
             ) ||
-            JSON.stringify(acceptanceResult.providerRun) !==
-              JSON.stringify(providerRun)
+            !providerRunMatches(acceptanceResult.providerRun, providerRun)
           ) {
             revoke("LEASE_LOST");
             throw new LeaseAuthorityError("LEASE_LOST");

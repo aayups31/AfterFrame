@@ -16,6 +16,7 @@ import type {
   ReleaseResearchJobInput,
   ResearchRunFingerprintPort,
 } from "@/core/research-runs/ports";
+import type { ResearchProviderAcceptanceResult } from "@/core/research-runs/provider-runs";
 import { ResearchAttemptRecordSchema } from "@/core/research-runs/schemas";
 import {
   ClaimedResearchJobSchema,
@@ -248,6 +249,9 @@ class Store implements DurableResearchWorkerStore {
   heartbeatResult: ResearchJobHeartbeatResult | null = null;
   checkpointInput: CheckpointResearchJobInput | null = null;
   acceptanceInput: AcceptResearchProviderRunInput | null = null;
+  acceptanceTransform:
+    | ((input: AcceptResearchProviderRunInput) => ResearchProviderAcceptanceResult)
+    | null = null;
   checkpointTransform:
     | ((input: CheckpointResearchJobInput) => ResearchJobCheckpointResult)
     | null = null;
@@ -302,6 +306,9 @@ class Store implements DurableResearchWorkerStore {
     this.calls.push("accept-provider");
     this.acceptanceInput = input;
     this.checkpointInput = input;
+    if (this.acceptanceTransform !== null) {
+      return this.acceptanceTransform(input);
+    }
     return {
       status: "COMMITTED" as const,
       checkpoint: input.checkpoint,
@@ -1044,6 +1051,74 @@ describe("durable research worker", () => {
     expect(store.acceptanceInput?.providerRun.traceId).toBe(
       "trace-provider-run-same-attempt",
     );
+  });
+
+  it("accepts Postgres-normalized equivalent provider timestamps", async () => {
+    const store = new Store();
+    store.acceptanceTransform = (input) => ({
+      status: "COMMITTED",
+      checkpoint: {
+        ...input.checkpoint,
+        createdAt: input.checkpoint.createdAt.replace("Z", "+00:00"),
+      },
+      providerRun: {
+        ...input.providerRun,
+        startedAt: input.providerRun.startedAt.replace("Z", "+00:00"),
+        acceptedAt: input.providerRun.acceptedAt.replace("Z", "+00:00"),
+        lastObservedAt: input.providerRun.lastObservedAt.replace(
+          "Z",
+          "+00:00",
+        ),
+      },
+      lease: {
+        ...input.lease,
+        jobVersion: input.lease.jobVersion + 1,
+        heartbeatAt: T2,
+        expiresAt: T4,
+      },
+    });
+    const executor: DurableResearchStageExecutor = {
+      identity: {
+        ...executorIdentity,
+        execution: {
+          ...executorIdentity.execution,
+          automaticRetrySafety: "RESUMABLE_PROVIDER_RUN",
+        },
+      },
+      async execute(input) {
+        await input.acceptProviderRun(
+          {
+            idempotencyKey: "provider-accepted-normalized-time",
+            sequence: 1,
+            kind: "PROVIDER_ACCEPTED",
+            completedUnits: 0,
+            totalUnits: 1,
+            providerRunId: "provider-run-normalized-time",
+            resumeTokenFingerprint: INPUT_MANIFEST_FINGERPRINT,
+            outputFingerprint: null,
+          },
+          providerRunFor(input, "provider-run-normalized-time"),
+        );
+        return {
+          status: "FAILED",
+          failure: retryableProviderFailure,
+          telemetry: {
+            telemetryState: "PARTIAL",
+            providerRunId: "provider-run-normalized-time",
+            usage: null,
+            cost: null,
+          },
+        };
+      },
+    };
+
+    const execution = await service(store, executor)(
+      BLACK_HAWK_DOWN_RESEARCH_BUNDLE.run.caseId,
+      command,
+    );
+
+    expect(execution.disposition).toBe("RELEASED");
+    expect(store.calls).toContain("accept-provider");
   });
 
   it("accepts the database's terminal fail-closed result when the persisted handoff budget is exhausted", async () => {

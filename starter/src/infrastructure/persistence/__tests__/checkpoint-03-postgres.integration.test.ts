@@ -1,9 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
 import { describe, expect, it } from "vitest";
 import { createDurableResearchWorkerService } from "@/application/research-worker/execute-durable-research-job";
 import { createStartResearchRunService } from "@/application/research/start-research-run";
+import type {
+  DurableResearchDiscoveryHandle,
+  DurableResearchDiscoveryInput,
+  DurableResearchDiscoveryProvider,
+} from "@/application/research/durable-discovery-port";
 import type { InvestigationBranch } from "@/core/branches/schemas";
 import type { InvestigationCase } from "@/core/cases/schemas";
 import type { ResearchRunFingerprintPort } from "@/core/research-runs/ports";
@@ -25,6 +31,7 @@ import {
   afterFrameV1ScopingExecutionPlan,
   createAfterFrameV1ResearchExecutorRegistry,
 } from "@/infrastructure/research/afterframe-v1-research-executor-registry";
+import { openAIBackgroundDiscoveryExecutionIdentity } from "@/infrastructure/research/openai-background-discovery";
 import { afterFrameV1SpecialistRegistry } from "@/specialists/registry";
 
 const integrationEnabled =
@@ -32,6 +39,15 @@ const integrationEnabled =
 const describeDatabase = integrationEnabled ? describe : describe.skip;
 const projectRoot = fileURLToPath(new URL("../../../../", import.meta.url));
 const rollbackSentinel = Symbol("checkpoint-03-rollback");
+const candidateAxisMigration = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../supabase/migrations/012_candidate_axis_bindings.sql",
+      import.meta.url,
+    ),
+  ),
+  "utf8",
+);
 
 const checkpoint03RpcNames = [
   "af_get_case_v1",
@@ -47,6 +63,9 @@ const checkpoint03RpcNames = [
   "af_release_research_job_v1",
   "af_get_research_identity_context_v1",
   "af_get_resolved_subject_identity_v1",
+  "af_get_research_discovery_context_v1",
+  "af_get_research_provider_run_v1",
+  "af_accept_research_provider_run_v1",
 ] as const;
 const allowedRpcNames = new Set<string>(checkpoint03RpcNames);
 
@@ -244,6 +263,125 @@ const fingerprints: ResearchRunFingerprintPort = {
   fingerprintExecutionOutput: (output) => sha256(JSON.stringify(output)),
 };
 
+class DeterministicPendingThenCompletedDiscoveryProvider
+  implements DurableResearchDiscoveryProvider
+{
+  startCalls = 0;
+  retrieveCalls = 0;
+  readonly requestedModel = "gpt-5.6-sol";
+  readonly providerSnapshot = "gpt-5.6-sol";
+
+  async start(input: DurableResearchDiscoveryInput) {
+    this.startCalls += 1;
+    const observedAt = new Date().toISOString();
+    const handle: DurableResearchDiscoveryHandle = {
+      providerResponseId: "resp_checkpoint_04b_deterministic",
+      state: "QUEUED",
+      requestedModel: this.requestedModel,
+      providerModel: this.providerSnapshot,
+      traceId: "trace-checkpoint-04b-deterministic",
+      binding: {
+        runId: input.runId,
+        jobId: input.jobId,
+        attemptId: input.attemptId,
+        caseId: input.caseId,
+        manifestFingerprint: input.manifestFingerprint,
+        externalIdempotencyKey: input.externalIdempotencyKey,
+      },
+      startedAt: observedAt,
+      lastObservedAt: observedAt,
+      inputBytes: 512,
+      dataControlMode: "MODIFIED_ABUSE_MONITORING",
+      projectIdFingerprint: "a".repeat(64),
+      privateContentIncluded: true,
+    };
+    return { kind: "STARTED" as const, state: "QUEUED" as const, handle };
+  }
+
+  async retrieve(
+    input: DurableResearchDiscoveryInput,
+    handle: DurableResearchDiscoveryHandle,
+  ) {
+    this.retrieveCalls += 1;
+    const observedAt = new Date().toISOString();
+    if (this.retrieveCalls === 1) {
+      return {
+        kind: "PENDING" as const,
+        state: "IN_PROGRESS" as const,
+        handle: { ...handle, state: "IN_PROGRESS" as const, lastObservedAt: observedAt },
+      };
+    }
+    const sourceClass = input.sourceClassIds[0];
+    const axis = input.axes.find((candidate) =>
+      sourceClass === undefined
+        ? false
+        : candidate.sourceClassIds.includes(sourceClass),
+    );
+    if (sourceClass === undefined || axis === undefined) {
+      throw new Error("Deterministic discovery input has no covered source class");
+    }
+    const completedHandle = {
+      ...handle,
+      state: "COMPLETED" as const,
+      lastObservedAt: observedAt,
+    };
+    return {
+      kind: "COMPLETED" as const,
+      state: "COMPLETED" as const,
+      handle: completedHandle,
+      output: {
+        candidates: [
+          {
+            candidateKey: "sha256:checkpoint-04b-deterministic-candidate",
+            title: "Deterministic source candidate",
+            canonicalUrl: "https://example.org/afterframe-source",
+            medium: "WEBPAGE" as const,
+            sourceClass,
+            axisIds: [axis.axisId],
+            accessState: "UNKNOWN" as const,
+            rightsState: "UNKNOWN" as const,
+            discoveryInputFingerprint: input.manifestFingerprint,
+            contentTrust: "UNTRUSTED" as const,
+            evidenceStatus: "NOT_EVIDENCE" as const,
+            reviewState: "PROPOSED" as const,
+            publicationAuthority: "NONE" as const,
+          },
+        ],
+        execution: {
+          executionKind: "MODEL_TOOL" as const,
+          traceId: completedHandle.traceId,
+          providerRunId: completedHandle.providerResponseId,
+          ...openAIBackgroundDiscoveryExecutionIdentity(
+            this.requestedModel,
+            this.providerSnapshot,
+          ),
+          telemetryState: "COMPLETE" as const,
+          usage: {
+            inputTokens: 100,
+            outputTokens: 20,
+            toolCalls: 1,
+            inputBytes: completedHandle.inputBytes,
+            outputBytes: 256,
+          },
+          cost: {
+            currency: "USD" as const,
+            pricingState: "UNPRICED" as const,
+            amountMicros: null,
+          },
+          latencyMs: 100,
+          provenanceInputs: [
+            { recordType: "CASE" as const, recordId: input.caseId },
+            { recordType: "RUN" as const, recordId: input.runId },
+            { recordType: "JOB" as const, recordId: input.jobId },
+            { recordType: "ATTEMPT" as const, recordId: input.attemptId },
+          ],
+          privateContentIncluded: true,
+        },
+      },
+    };
+  }
+}
+
 async function seedCase(
   client: Client,
   investigationCase: InvestigationCase,
@@ -370,6 +508,9 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
         let lifecycleError: unknown;
         let rpcFailure: RpcFailure | undefined;
         try {
+          if (process.env.AFTERFRAME_DB_MIGRATION_012_PREFLIGHT === "1") {
+            await client.query(candidateAxisMigration);
+          }
           await seedCase(client, investigationCase, rootBranch);
           const invokeRpc = transactionalRpcInvoker(client, (failure) => {
             rpcFailure = failure;
@@ -658,7 +799,7 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
   );
 
   it(
-    "durably resolves a generic movie identity and causally binds SCOPING",
+    "durably resolves a generic movie and completes resumable DISCOVERY",
     async () => {
       const client = new Client({
         connectionString: loadDatabaseUrl(),
@@ -721,6 +862,9 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
         let lifecycleError: unknown;
         let rpcFailure: RpcFailure | undefined;
         try {
+          if (process.env.AFTERFRAME_DB_MIGRATION_012_PREFLIGHT === "1") {
+            await client.query(candidateAxisMigration);
+          }
           await seedCase(client, investigationCase, rootBranch);
           const invokeRpc = transactionalRpcInvoker(client, (failure) => {
             rpcFailure = failure;
@@ -755,6 +899,8 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
             throw new Error("Research start did not stage IDENTITY first");
           }
 
+          const discoveryProvider =
+            new DeterministicPendingThenCompletedDiscoveryProvider();
           const registry = createAfterFrameV1ResearchExecutorRegistry({
             actorId,
             invokeRpc,
@@ -762,6 +908,13 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
             resolverTimeoutMs: 20_000,
             createId: () => randomUUID(),
             now: () => new Date(),
+            discovery: {
+              provider: discoveryProvider,
+              requestedModel: discoveryProvider.requestedModel,
+              expectedProviderSnapshot: discoveryProvider.providerSnapshot,
+              pollIntervalMs: 100,
+              maxPollsPerExecution: 1,
+            },
           });
           expect(registry.resolve("IDENTITY")?.identity.execution).toEqual(
             afterFrameV1IdentityExecutionPlan(20_000),
@@ -958,6 +1111,84 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
             resolvedIdentity?.publicIdentity.displayName ?? "unreachable-name",
           );
 
+          const discoveryStateResult = await client.query<{
+            run_version: string;
+            job_id: string;
+            job_version: string;
+          }>(
+            `select run.aggregate_version::text as run_version,
+               job.id::text as job_id,
+               job.aggregate_version::text as job_version
+             from public.af_research_runs run
+             join public.af_research_jobs job on job.run_id = run.id
+             where run.id = $1 and job.stage = 'DISCOVERY'`,
+            [started.bundle.run.id],
+          );
+          const discoveryState = discoveryStateResult.rows[0];
+          if (discoveryState === undefined) {
+            throw new Error("SCOPING did not expose DISCOVERY");
+          }
+          const firstDiscoveryWorker = createDurableResearchWorkerService({
+            store: workerStore,
+            executors: registry,
+            fingerprints,
+            workerId: "checkpoint-04b-discovery-worker-a",
+            leaseDurationSeconds: 60,
+            heartbeatIntervalMs: 1_000,
+            createId: () => randomUUID(),
+            now: () => new Date().toISOString(),
+          });
+          const discoveryCommand = {
+            runId: started.bundle.run.id,
+            jobId: discoveryState.job_id,
+            stage: "DISCOVERY" as const,
+            expectedRunVersion: Number(discoveryState.run_version),
+            expectedJobVersion: Number(discoveryState.job_version),
+            idempotencyKey: "checkpoint-04b:generic-movie:discovery:v1",
+          };
+          const handedOff = await firstDiscoveryWorker(
+            actorId,
+            discoveryCommand,
+          );
+          expect(handedOff.disposition).toBe("RELEASED");
+          expect(discoveryProvider.startCalls).toBe(1);
+          expect(discoveryProvider.retrieveCalls).toBe(1);
+
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          const takeoverStateResult = await client.query<{
+            run_version: string;
+            job_version: string;
+          }>(
+            `select run.aggregate_version::text as run_version,
+               job.aggregate_version::text as job_version
+             from public.af_research_runs run
+             join public.af_research_jobs job on job.run_id = run.id
+             where run.id = $1 and job.id = $2`,
+            [started.bundle.run.id, discoveryState.job_id],
+          );
+          const takeoverState = takeoverStateResult.rows[0];
+          if (takeoverState === undefined) {
+            throw new Error("DISCOVERY handoff state disappeared");
+          }
+          const takeoverWorker = createDurableResearchWorkerService({
+            store: workerStore,
+            executors: registry,
+            fingerprints,
+            workerId: "checkpoint-04b-discovery-worker-b",
+            leaseDurationSeconds: 60,
+            heartbeatIntervalMs: 1_000,
+            createId: () => randomUUID(),
+            now: () => new Date().toISOString(),
+          });
+          const discovered = await takeoverWorker(actorId, {
+            ...discoveryCommand,
+            expectedRunVersion: Number(takeoverState.run_version),
+            expectedJobVersion: Number(takeoverState.job_version),
+          });
+          expect(discovered.disposition).toBe("SUCCEEDED");
+          expect(discoveryProvider.startCalls).toBe(1);
+          expect(discoveryProvider.retrieveCalls).toBe(2);
+
           const durableCounts = await client.query<{
             attempts: string;
             checkpoints: string;
@@ -965,6 +1196,8 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
             identities: string;
             manifests: string;
             outputs: string;
+            provider_runs: string;
+            candidates: string;
           }>(
             `select
                (select count(*)::text
@@ -984,16 +1217,24 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
                   where run_id = $1) as manifests,
                (select count(*)::text
                   from public.af_research_stage_outputs
-                  where run_id = $1) as outputs`,
+                  where run_id = $1) as outputs,
+               (select count(*)::text
+                  from public.af_research_provider_runs
+                  where run_id = $1) as provider_runs,
+               (select count(*)::text
+                  from public.af_source_candidates
+                  where run_id = $1) as candidates`,
             [started.bundle.run.id],
           );
           expect(durableCounts.rows[0]).toEqual({
-            attempts: "2",
-            checkpoints: "0",
-            handoffs: "0",
+            attempts: "3",
+            checkpoints: "2",
+            handoffs: "1",
             identities: "1",
-            manifests: "2",
-            outputs: "2",
+            manifests: "3",
+            outputs: "3",
+            provider_runs: "1",
+            candidates: "1",
           });
 
           throw rollbackSentinel;

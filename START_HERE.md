@@ -25,7 +25,7 @@ Do not implement until you can explain all four statements:
 
 `prototype/`, the current starter components, diagrams, storyboards, and premium visual specifications are vision experiments. They may suggest atmosphere or interaction hypotheses, but they do not prescribe the production interface.
 
-The existing starter UI is a mocked vertical slice, not a production research engine. The current durable production work begins in `docs/48-build-checkpoint-04b.md`; the latest completed slice is `docs/56-build-checkpoint-04b-attested-discovery-composition.md`. Its boundaries, not the mock UI types or routes, are the implementation starting point. Migrations 001–011 are deployed. The next gate is a rollback-safe deterministic proof of the complete Postgres discovery lifecycle; paid live discovery and the public route remain disabled.
+The existing starter UI is a mocked vertical slice, not a production research engine. The current durable production work begins in `docs/48-build-checkpoint-04b.md`; the latest completed slice is `docs/57-build-checkpoint-04b-deterministic-postgres-discovery-lifecycle.md`. Its boundaries, not the mock UI types or routes, are the implementation starting point. Migrations 001–012 are deployed. The next gate is candidate resolution and locator verification; paid live discovery and the public route remain disabled.
 
 To run it:
 
