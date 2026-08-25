@@ -25,7 +25,7 @@ Do not implement until you can explain all four statements:
 
 `prototype/`, the current starter components, diagrams, storyboards, and premium visual specifications are vision experiments. They may suggest atmosphere or interaction hypotheses, but they do not prescribe the production interface.
 
-The existing starter UI is a mocked vertical slice, not a production research engine. The current durable production work begins in `docs/48-build-checkpoint-04b.md`; the latest completed slice is `docs/58-build-checkpoint-04c-source-resolution-boundary.md`. Its boundaries, not the mock UI types or routes, are the implementation starting point. Migrations 001–012 are deployed. The next gate is Postgres persistence and durable-worker integration for conservative source and source-level locator proposals; paid live discovery and the public route remain disabled.
+The existing starter UI is a mocked vertical slice, not a production research engine. The current durable production work begins in `docs/48-build-checkpoint-04b.md`; the latest completed slice is `docs/59-build-checkpoint-04c-durable-resolution-acceptance.md`. Its boundaries, not the mock UI types or routes, are the implementation starting point. Migrations 001–013 are deployed. The next gate is the resumable RESOLUTION executor over the durable acceptance ledger, followed by medium-specific retrieval and exact-locator verification; paid live discovery and the public route remain disabled.
 
 To run it:
 

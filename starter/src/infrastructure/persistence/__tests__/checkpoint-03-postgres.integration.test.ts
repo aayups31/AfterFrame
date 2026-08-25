@@ -10,6 +10,7 @@ import type {
   DurableResearchDiscoveryInput,
   DurableResearchDiscoveryProvider,
 } from "@/application/research/durable-discovery-port";
+import type { SourceMetadataProbeTransport } from "@/application/research/source-resolution-port";
 import type { InvestigationBranch } from "@/core/branches/schemas";
 import type { InvestigationCase } from "@/core/cases/schemas";
 import type { ResearchRunFingerprintPort } from "@/core/research-runs/ports";
@@ -26,16 +27,22 @@ import {
 } from "@/infrastructure/persistence/supabase-investigation-store";
 import { SupabaseResearchRunStartStore } from "@/infrastructure/persistence/supabase-research-run-start-store";
 import { SupabaseResearchIdentityReader } from "@/infrastructure/persistence/supabase-research-identity-reader";
+import { SupabaseSourceResolutionPersistence } from "@/infrastructure/persistence/supabase-source-resolution-persistence";
 import {
   afterFrameV1IdentityExecutionPlan,
   afterFrameV1ScopingExecutionPlan,
+  afterFrameV1SourceResolutionExecutionPlan,
   createAfterFrameV1ResearchExecutorRegistry,
 } from "@/infrastructure/research/afterframe-v1-research-executor-registry";
+import { DeterministicSourceMetadataResolver } from "@/infrastructure/research/deterministic-source-metadata-resolver";
 import { openAIBackgroundDiscoveryExecutionIdentity } from "@/infrastructure/research/openai-background-discovery";
 import { afterFrameV1SpecialistRegistry } from "@/specialists/registry";
 
 const integrationEnabled =
   process.env.AFTERFRAME_DB_INTEGRATION === "1";
+const durableResolutionLifecycleEnabled =
+  process.env.AFTERFRAME_DB_MIGRATION_013_PREFLIGHT === "1" ||
+  process.env.AFTERFRAME_DB_RESOLUTION_INTEGRATION === "1";
 const describeDatabase = integrationEnabled ? describe : describe.skip;
 const projectRoot = fileURLToPath(new URL("../../../../", import.meta.url));
 const rollbackSentinel = Symbol("checkpoint-03-rollback");
@@ -43,6 +50,15 @@ const candidateAxisMigration = readFileSync(
   fileURLToPath(
     new URL(
       "../../../../supabase/migrations/012_candidate_axis_bindings.sql",
+      import.meta.url,
+    ),
+  ),
+  "utf8",
+);
+const durableResolutionMigration = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../supabase/migrations/013_durable_source_resolution_acceptance.sql",
       import.meta.url,
     ),
   ),
@@ -67,7 +83,12 @@ const checkpoint03RpcNames = [
   "af_get_research_provider_run_v1",
   "af_accept_research_provider_run_v1",
 ] as const;
-const allowedRpcNames = new Set<string>(checkpoint03RpcNames);
+const allowedRpcNames = new Set<string>([
+  ...checkpoint03RpcNames,
+  "af_get_research_resolution_context_v1",
+  "af_accept_source_resolution_v1",
+  "af_get_source_resolution_records_v1",
+]);
 
 function loadDatabaseUrl() {
   if (process.env.SUPABASE_DB_URL === undefined) {
@@ -511,6 +532,9 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
           if (process.env.AFTERFRAME_DB_MIGRATION_012_PREFLIGHT === "1") {
             await client.query(candidateAxisMigration);
           }
+          if (process.env.AFTERFRAME_DB_MIGRATION_013_PREFLIGHT === "1") {
+            await client.query(durableResolutionMigration);
+          }
           await seedCase(client, investigationCase, rootBranch);
           const invokeRpc = transactionalRpcInvoker(client, (failure) => {
             rpcFailure = failure;
@@ -865,6 +889,9 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
           if (process.env.AFTERFRAME_DB_MIGRATION_012_PREFLIGHT === "1") {
             await client.query(candidateAxisMigration);
           }
+          if (process.env.AFTERFRAME_DB_MIGRATION_013_PREFLIGHT === "1") {
+            await client.query(durableResolutionMigration);
+          }
           await seedCase(client, investigationCase, rootBranch);
           const invokeRpc = transactionalRpcInvoker(client, (failure) => {
             rpcFailure = failure;
@@ -1189,6 +1216,249 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
           expect(discoveryProvider.startCalls).toBe(1);
           expect(discoveryProvider.retrieveCalls).toBe(2);
 
+          if (durableResolutionLifecycleEnabled) {
+            const resolutionStateResult = await client.query<{
+              run_version: string;
+              job_id: string;
+              job_version: string;
+              job_status: string;
+            }>(
+              `select run.aggregate_version::text as run_version,
+                 job.id::text as job_id,
+                 job.aggregate_version::text as job_version,
+                 job.status::text as job_status
+               from public.af_research_runs run
+               join public.af_research_jobs job on job.run_id = run.id
+               where run.id = $1 and job.stage = 'RESOLUTION'`,
+              [started.bundle.run.id],
+            );
+            const resolutionState = resolutionStateResult.rows[0];
+            if (resolutionState === undefined) {
+              throw new Error("DISCOVERY did not expose RESOLUTION");
+            }
+            expect(resolutionState.job_status).toBe("QUEUED");
+
+            const resolutionAttemptId = randomUUID();
+            const resolutionClaim = await workerStore.claimResearchJob({
+              actorId,
+              runId: started.bundle.run.id,
+              jobId: resolutionState.job_id,
+              stage: "RESOLUTION",
+              expectedRunVersion: Number(resolutionState.run_version),
+              expectedJobVersion: Number(resolutionState.job_version),
+              idempotencyKey: "checkpoint-04c:resolution:claim:v1",
+              attemptId: resolutionAttemptId,
+              workerId: "checkpoint-04c-resolution-worker",
+              execution: afterFrameV1SourceResolutionExecutionPlan(),
+              leaseDurationSeconds: 60,
+            });
+            expect(resolutionClaim.status).toBe("CLAIMED");
+            if (resolutionClaim.status !== "CLAIMED") {
+              throw new Error("RESOLUTION was not claimed");
+            }
+
+            const resolutionStore = new SupabaseSourceResolutionPersistence({
+              actorId,
+              invokeRpc,
+            });
+            const resolutionContext = await resolutionStore.getResolutionContext({
+              actorId,
+              runId: started.bundle.run.id,
+              jobId: resolutionState.job_id,
+              attemptId: resolutionAttemptId,
+            });
+            if (resolutionContext === null) {
+              throw new Error("RESOLUTION context was not durably reconstructed");
+            }
+            expect(resolutionContext.candidates).toHaveLength(1);
+            expect(resolutionContext.manifestFingerprint).toBe(
+              resolutionClaim.claim.inputManifest.manifestFingerprint,
+            );
+            const candidate = resolutionContext.candidates[0];
+            if (candidate === undefined || candidate.canonicalUrl === null) {
+              throw new Error("Resolution fixture candidate has no canonical URL");
+            }
+            const observedAt = await databaseTimestamp(client);
+            const transport = {
+              async probe(url: string) {
+                return {
+                  requestedUrl: url,
+                  hops: [
+                    {
+                      url,
+                      statusCode: 200,
+                      resolvedAddresses: ["93.184.216.34"],
+                      contentType: "text/html; charset=utf-8",
+                      contentLength: 4_096,
+                      title: "Deterministic source candidate",
+                      observedAt,
+                    },
+                  ],
+                  bodyIncluded: false,
+                };
+              },
+            } satisfies SourceMetadataProbeTransport;
+            const resolver = new DeterministicSourceMetadataResolver(transport);
+            const resolutionResult = await resolver.resolve(
+              {
+                schemaVersion: 1,
+                runId: resolutionContext.runId,
+                jobId: resolutionContext.jobId,
+                attemptId: resolutionContext.attemptId,
+                caseId: resolutionContext.caseId,
+                manifestFingerprint: resolutionContext.manifestFingerprint,
+                candidate,
+              },
+              new AbortController().signal,
+            );
+            expect(resolutionResult.status).toBe("RESOLVED");
+            if (resolutionResult.status !== "RESOLVED") {
+              throw new Error("Deterministic source resolution did not resolve");
+            }
+            const resolutionRecord = {
+              schemaVersion: 1 as const,
+              id: randomUUID(),
+              runId: resolutionContext.runId,
+              jobId: resolutionContext.jobId,
+              attemptId: resolutionContext.attemptId,
+              caseId: resolutionContext.caseId,
+              manifestFingerprint: resolutionContext.manifestFingerprint,
+              idempotencyKey: `checkpoint-04c:resolve:${candidate.id}:v1`,
+              resolver: { id: "http-source-metadata", version: "1.0.0" },
+              result: resolutionResult,
+              createdAt: observedAt,
+            };
+            const accepted = await resolutionStore.acceptResolution({
+              actorId,
+              lease: resolutionClaim.claim.lease,
+              record: resolutionRecord,
+              leaseDurationSeconds: 60,
+            });
+            expect(accepted.status).toBe("COMMITTED");
+            if (accepted.status !== "COMMITTED") {
+              throw new Error("Source resolution was not accepted");
+            }
+            const replayed = await resolutionStore.acceptResolution({
+              actorId,
+              lease: accepted.lease,
+              record: resolutionRecord,
+              leaseDurationSeconds: 60,
+            });
+            expect(replayed).toMatchObject({
+              status: "REPLAY",
+              record: accepted.record,
+            });
+            if (replayed.status !== "REPLAY") {
+              throw new Error("Source resolution replay was not recognized");
+            }
+            const acceptedRecords = await resolutionStore.listAcceptedResolutions({
+              actorId,
+              runId: resolutionContext.runId,
+              jobId: resolutionContext.jobId,
+              attemptId: resolutionContext.attemptId,
+            });
+            expect(acceptedRecords).toEqual([accepted.record]);
+
+            const resolutionCompletionTime = await databaseTimestamp(client);
+            const resolutionCompletion = ResearchStageExecutionResultSchema.parse({
+              outcome: "SUCCEEDED",
+              boundedReasonCodes: [],
+              output: {
+                schemaVersion: 1,
+                id: randomUUID(),
+                runId: resolutionContext.runId,
+                jobId: resolutionContext.jobId,
+                attemptId: resolutionContext.attemptId,
+                kind: "RESOLUTION_RESULT",
+                stage: "RESOLUTION",
+                reviewState: "PROPOSED",
+                publicationAuthority: "NONE",
+                provenanceInputs: [
+                  { recordType: "JOB", recordId: resolutionContext.jobId },
+                  { recordType: "ATTEMPT", recordId: resolutionContext.attemptId },
+                  { recordType: "SOURCE_CANDIDATE", recordId: candidate.id },
+                  {
+                    recordType: "SOURCE",
+                    recordId: resolutionResult.proposal.source.id,
+                  },
+                  {
+                    recordType: "LOCATOR",
+                    recordId: resolutionResult.proposal.locator.id,
+                  },
+                ],
+                createdAt: resolutionCompletionTime,
+                sourceIds: [resolutionResult.proposal.source.id],
+                locatorIds: [resolutionResult.proposal.locator.id],
+                unresolvedCandidateIds: [],
+              },
+              subjectIdentities: [],
+              sourceCandidates: [],
+              untrustedContent: [],
+            });
+            const resolutionCompleted = await workerStore.completeResearchJob({
+              actorId,
+              lease: replayed.lease,
+              idempotencyKey: "checkpoint-04c:resolution:complete:v1",
+              result: resolutionCompletion,
+              outputFingerprint:
+                fingerprints.fingerprintExecutionOutput(resolutionCompletion),
+              execution: {
+                telemetryState: "COMPLETE",
+                providerRunId: null,
+                usage: {
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  toolCalls: 1,
+                  inputBytes: 0,
+                  outputBytes: 0,
+                },
+                cost: {
+                  currency: "USD",
+                  pricingState: "UNPRICED",
+                  amountMicros: null,
+                },
+                latencyMs: 1,
+                completedAt: resolutionCompletionTime,
+              },
+            });
+            expect(resolutionCompleted).toMatchObject({
+              status: "COMMITTED",
+              outcome: "SUCCEEDED",
+            });
+
+            const resolutionCounts = await client.query<{
+              sources: string;
+              locators: string;
+              resolutions: string;
+              outputs: string;
+              normalization_status: string;
+            }>(
+              `select
+                 (select count(*)::text from public.af_sources
+                   where id = $2) as sources,
+                 (select count(*)::text from public.af_source_locators
+                   where id = $3) as locators,
+                 (select count(*)::text from public.af_source_resolution_records
+                   where run_id = $1) as resolutions,
+                 (select count(*)::text from public.af_research_stage_outputs
+                   where run_id = $1 and stage = 'RESOLUTION') as outputs,
+                 (select status::text from public.af_research_jobs
+                   where run_id = $1 and stage = 'NORMALIZATION') as normalization_status`,
+              [
+                started.bundle.run.id,
+                resolutionResult.proposal.source.id,
+                resolutionResult.proposal.locator.id,
+              ],
+            );
+            expect(resolutionCounts.rows[0]).toEqual({
+              sources: "1",
+              locators: "1",
+              resolutions: "1",
+              outputs: "1",
+              normalization_status: "QUEUED",
+            });
+          }
+
           const durableCounts = await client.query<{
             attempts: string;
             checkpoints: string;
@@ -1227,12 +1497,21 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
             [started.bundle.run.id],
           );
           expect(durableCounts.rows[0]).toEqual({
-            attempts: "3",
+            attempts:
+              durableResolutionLifecycleEnabled
+                ? "4"
+                : "3",
             checkpoints: "2",
             handoffs: "1",
             identities: "1",
-            manifests: "3",
-            outputs: "3",
+            manifests:
+              durableResolutionLifecycleEnabled
+                ? "4"
+                : "3",
+            outputs:
+              durableResolutionLifecycleEnabled
+                ? "4"
+                : "3",
             provider_runs: "1",
             candidates: "1",
           });

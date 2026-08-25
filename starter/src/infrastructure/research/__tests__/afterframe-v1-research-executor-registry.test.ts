@@ -4,6 +4,7 @@ import {
   afterFrameV1IdentityExecutionPlan,
   afterFrameV1ScopingExecutionPlan,
   afterFrameV1DiscoveryExecutionPlan,
+  afterFrameV1SourceResolutionExecutionPlan,
   createAfterFrameV1ResearchExecutorRegistry,
   createAfterFrameV1ShadowResearchExecutorRegistry,
 } from "@/infrastructure/research/afterframe-v1-research-executor-registry";
@@ -27,6 +28,18 @@ describe("AfterFrame V1 durable executor composition", () => {
       tool: { id: "openai-web-search", version: "responses-v1" },
       privateContentIncluded: true,
       automaticRetrySafety: "RESUMABLE_PROVIDER_RUN",
+    });
+  });
+
+  it("defines body-free, idempotent source resolution as a resolver execution", () => {
+    expect(afterFrameV1SourceResolutionExecutionPlan()).toMatchObject({
+      executorId: "source-resolution-stage-executor",
+      executionKind: "RESOLVER",
+      model: null,
+      prompt: null,
+      tool: { id: "http-source-metadata", version: "1.0.0" },
+      privateContentIncluded: false,
+      automaticRetrySafety: "IDEMPOTENT_PROVIDER_REQUEST",
     });
   });
 

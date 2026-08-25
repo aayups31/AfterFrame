@@ -79,6 +79,29 @@ export function afterFrameV1ScopingExecutionPlan() {
   });
 }
 
+export function afterFrameV1SourceResolutionExecutionPlan() {
+  return ResearchWorkerExecutionPlanSchema.parse({
+    executorId: "source-resolution-stage-executor",
+    executorVersion: "1.0.0",
+    configurationFingerprint: sha256(
+      "afterframe:source-resolution:http-source-metadata@1.0.0:v1",
+    ),
+    executionKind: "RESOLVER",
+    model: null,
+    prompt: null,
+    schema: {
+      id: "source-resolution-stage-result",
+      version: "1.0.0",
+      schemaFingerprint: sha256(
+        "afterframe:source-resolution:body-free-acceptance:v1",
+      ),
+    },
+    tool: { id: "http-source-metadata", version: "1.0.0" },
+    privateContentIncluded: false,
+    automaticRetrySafety: "IDEMPOTENT_PROVIDER_REQUEST",
+  });
+}
+
 /**
  * Claim-time identity for the resumable DISCOVERY executor. The provider
  * snapshot is explicit so an alias cannot silently become audit provenance.
