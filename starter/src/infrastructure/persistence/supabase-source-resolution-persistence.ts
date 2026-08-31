@@ -1,11 +1,9 @@
 import { z } from "zod";
 import {
   DurableSourceResolutionContextSchema,
-  DurableSourceResolutionRecordSchema,
-  SourceResolutionAcceptanceResultSchema,
   StoredSourceResolutionRecordSchema,
   type DurableSourceResolutionContextReader,
-  type DurableSourceResolutionStore,
+  type DurableSourceResolutionRecordReader,
 } from "@/application/research/source-resolution-port";
 import { EntityIdSchema } from "@/core/shared/schemas";
 import type { SupabaseRpcInvoker } from "@/infrastructure/persistence/supabase-investigation-store";
@@ -31,7 +29,9 @@ export type SupabaseSourceResolutionPersistenceOptions = Readonly<{
 
 /** Server-only adapter for body-free, lease-fenced source resolution state. */
 export class SupabaseSourceResolutionPersistence
-  implements DurableSourceResolutionContextReader, DurableSourceResolutionStore
+  implements
+    DurableSourceResolutionContextReader,
+    DurableSourceResolutionRecordReader
 {
   readonly #actorId: string;
   readonly #invokeRpc: SupabaseRpcInvoker;
@@ -79,39 +79,6 @@ export class SupabaseSourceResolutionPersistence
       throw new SupabaseSourceResolutionPersistenceError(
         "RPC_CONTRACT_INVALID",
         "Postgres returned an invalid source-resolution context",
-      );
-    }
-    return parsed.data;
-  }
-
-  async acceptResolution(
-    input: Parameters<DurableSourceResolutionStore["acceptResolution"]>[0],
-  ) {
-    if (input.actorId !== this.#actorId) {
-      throw new SupabaseSourceResolutionPersistenceError(
-        "PERSISTENCE_UNAVAILABLE",
-        "The source-resolution persistence boundary is unavailable",
-      );
-    }
-    if (
-      !Number.isInteger(input.leaseDurationSeconds) ||
-      input.leaseDurationSeconds < 5 ||
-      input.leaseDurationSeconds > 900
-    ) {
-      throw new RangeError("Source-resolution lease must be between 5 and 900 seconds");
-    }
-    const record = DurableSourceResolutionRecordSchema.parse(input.record);
-    const data = await this.#rpc("af_accept_source_resolution_v1", {
-      p_actor_id: this.#actorId,
-      p_lease: input.lease,
-      p_record: record,
-      p_lease_seconds: input.leaseDurationSeconds,
-    });
-    const parsed = SourceResolutionAcceptanceResultSchema.safeParse(data);
-    if (!parsed.success) {
-      throw new SupabaseSourceResolutionPersistenceError(
-        "RPC_CONTRACT_INVALID",
-        "Postgres returned an invalid source-resolution acceptance",
       );
     }
     return parsed.data;

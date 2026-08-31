@@ -46,10 +46,10 @@ Start with `../prompts/codex/00-bootstrap.md`.
 - `src/infrastructure/auth` verifies a Supabase access token before any service-role persistence call.
 - `src/infrastructure/persistence` implements the investigation store through versioned, actor-scoped Postgres RPCs.
 - `src/specialists/movie/infrastructure` resolves any structurally valid TMDB movie reference without treating provider metadata as evidence.
-- `src/application/research-worker/executors` and the V1 registry compose durable `IDENTITY`, deterministic `SCOPING`, and the attested `DISCOVERY` path; later unimplemented stages still fail closed.
+- `src/application/research-worker/executors` and the V1 registry compose durable `IDENTITY`, deterministic `SCOPING`, the attested `DISCOVERY` path, and resumable `RESOLUTION` when its body-free resolver capability is supplied; later unimplemented stages still fail closed.
 - `src/infrastructure/persistence` authors immutable causal attempt manifests and persists the exact identity/output relationship through deployed migration 008.
 - `src/infrastructure/research` contains the shadow-only OpenAI web-source discovery adapter plus a body-free deterministic source metadata resolver. Neither is connected to a public route.
-- deployed migration 013 and `src/infrastructure/persistence/supabase-source-resolution-persistence.ts` provide actor-scoped RESOLUTION context, lease-fenced source/locator acceptance, exact replay, and a database-enforced completion partition.
+- deployed migration 013, the worker-owned acceptance RPC, and `src/infrastructure/persistence/supabase-source-resolution-persistence.ts` provide actor-scoped RESOLUTION recovery, lease-fenced source/locator acceptance, exact replay, bounded same-attempt handoff, and a database-enforced completion partition.
 
 Future visual libraries such as `gsap` or `@xyflow/react` remain intentionally deferred; the prototype UI is not the production build target.
 

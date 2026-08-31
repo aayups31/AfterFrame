@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
   AcceptResearchProviderRunInput,
+  AcceptSourceResolutionInput,
   CheckpointResearchJobInput,
   ClaimResearchJobInput,
   CompleteDurableResearchJobInput,
@@ -189,6 +190,30 @@ const releaseInput: ReleaseResearchJobInput = {
   idempotencyKey: "release-once",
 };
 
+const sourceResolutionInput: AcceptSourceResolutionInput = {
+  actorId: ACTOR_ID,
+  lease,
+  leaseDurationSeconds: 60,
+  record: {
+    schemaVersion: 1,
+    id: "41000000-0000-4000-8000-000000000009",
+    runId,
+    jobId,
+    attemptId: ATTEMPT_ID,
+    caseId: BLACK_HAWK_DOWN_RESEARCH_BUNDLE.run.caseId,
+    manifestFingerprint: HASH_A,
+    idempotencyKey: "resolve-candidate-once",
+    resolver: { id: "http-source-metadata", version: "1.0.0" },
+    result: {
+      status: "UNRESOLVED",
+      candidateId: "41000000-0000-4000-8000-000000000010",
+      code: "source-unavailable",
+      publicationAuthority: "NONE",
+    },
+    createdAt: T2,
+  },
+};
+
 describe("Supabase durable research worker store", () => {
   it("delegates every state transition to one versioned RPC with a JSON lease cursor", async () => {
     const calls: Array<{
@@ -203,6 +228,7 @@ describe("Supabase durable research worker store", () => {
       af_heartbeat_research_job_v1: { status: "CANCELLED" },
       af_checkpoint_research_job_v1: { status: "LEASE_LOST" },
       af_accept_research_provider_run_v1: { status: "LEASE_LOST" },
+      af_accept_source_resolution_v1: { status: "LEASE_LOST" },
       af_complete_research_job_v2: { status: "CANCELLED" },
       af_fail_research_job_v1: { status: "LEASE_LOST" },
       af_release_research_job_v1: { status: "CANCELLED" },
@@ -220,6 +246,7 @@ describe("Supabase durable research worker store", () => {
     await store.heartbeatResearchJob(heartbeatInput);
     await store.checkpointResearchJob(checkpointInput);
     await store.acceptResearchProviderRun(acceptanceInput);
+    await store.acceptSourceResolution(sourceResolutionInput);
     await store.completeResearchJob(completeInput);
     await store.failResearchJob(failInput);
     await store.releaseResearchJob(releaseInput);
@@ -229,6 +256,7 @@ describe("Supabase durable research worker store", () => {
       "af_heartbeat_research_job_v1",
       "af_checkpoint_research_job_v1",
       "af_accept_research_provider_run_v1",
+      "af_accept_source_resolution_v1",
       "af_complete_research_job_v2",
       "af_fail_research_job_v1",
       "af_release_research_job_v1",
@@ -268,19 +296,25 @@ describe("Supabase durable research worker store", () => {
     expect(calls[4]?.parameters).toEqual({
       p_actor_id: ACTOR_ID,
       p_lease: lease,
+      p_record: sourceResolutionInput.record,
+      p_lease_seconds: 60,
+    });
+    expect(calls[5]?.parameters).toEqual({
+      p_actor_id: ACTOR_ID,
+      p_lease: lease,
       p_idempotency_key: "complete-once",
       p_result: completeInput.result,
       p_output_fingerprint: HASH_B,
       p_execution: completion,
     });
-    expect(calls[5]?.parameters).toEqual({
+    expect(calls[6]?.parameters).toEqual({
       p_actor_id: ACTOR_ID,
       p_lease: lease,
       p_idempotency_key: "failure-once",
       p_failure: failure,
       p_execution: completion,
     });
-    expect(calls[6]?.parameters).toEqual({
+    expect(calls[7]?.parameters).toEqual({
       p_actor_id: ACTOR_ID,
       p_lease: lease,
       p_idempotency_key: "release-once",

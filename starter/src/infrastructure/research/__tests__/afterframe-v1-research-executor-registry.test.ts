@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { RESEARCH_STAGES } from "@/core/research-runs/schemas";
+import type { SourceCandidateResolver } from "@/application/research/source-resolution-port";
 import {
   afterFrameV1IdentityExecutionPlan,
   afterFrameV1ScopingExecutionPlan,
@@ -99,6 +100,27 @@ describe("AfterFrame V1 durable executor composition", () => {
         "gpt-5.6-sol",
       ),
     });
+    expect(invokeRpc).not.toHaveBeenCalled();
+  });
+
+  it("registers RESOLUTION only when a body-free candidate resolver is supplied", () => {
+    const invokeRpc = vi.fn(async () => ({ data: null, error: null }));
+    const resolver = {
+      resolve: vi.fn(),
+    } satisfies SourceCandidateResolver;
+    const registry = createAfterFrameV1ResearchExecutorRegistry({
+      actorId: ACTOR_ID,
+      invokeRpc,
+      tmdbApiKey: "private-tmdb-key",
+      fetchImpl: vi.fn(),
+      resolution: { resolver },
+    });
+
+    expect(registry.resolve("RESOLUTION")?.identity).toEqual({
+      stage: "RESOLUTION",
+      execution: afterFrameV1SourceResolutionExecutionPlan(),
+    });
+    expect(registry.resolve("DISCOVERY")).toBeNull();
     expect(invokeRpc).not.toHaveBeenCalled();
   });
 

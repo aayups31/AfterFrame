@@ -47,6 +47,12 @@ import {
   OpaqueReferenceSchema,
   Sha256Schema,
 } from "@/core/shared/schemas";
+import {
+  DurableSourceResolutionRecordSchema,
+  SourceResolutionAcceptanceResultSchema,
+  type DurableSourceResolutionRecord,
+  type StoredSourceResolutionRecord,
+} from "@/core/research/source-resolution";
 
 export type ResearchWorkerIdentifierKind =
   | "research_attempt"
@@ -945,6 +951,74 @@ export function createDurableResearchWorkerService(
       });
     };
 
+    const acceptSourceResolution = async (
+      recordInput: DurableSourceResolutionRecord,
+    ): Promise<StoredSourceResolutionRecord> => {
+      const record = DurableSourceResolutionRecordSchema.parse(recordInput);
+      if (
+        claim.job.stage !== "RESOLUTION" ||
+        record.runId !== claim.run.id ||
+        record.jobId !== claim.job.id ||
+        record.attemptId !== claim.attempt.id ||
+        record.caseId !== claim.run.caseId ||
+        record.manifestFingerprint !==
+          claim.inputManifest.manifestFingerprint
+      ) {
+        throw new DurableResearchWorkerError(
+          "CLAIM_REJECTED",
+          "Source resolution does not match the active resolution attempt",
+        );
+      }
+      const persistResolution = dependencies.store.acceptSourceResolution;
+      return serialize(async () => {
+        if (authority !== "ACTIVE" || !acceptingCheckpoints) {
+          throw new LeaseAuthorityError(
+            authority === "ACTIVE" ? "LEASE_LOST" : authority,
+          );
+        }
+        let acceptanceResult;
+        try {
+          acceptanceResult = boundaryParse(
+            SourceResolutionAcceptanceResultSchema,
+            await persistResolution.call(dependencies.store, {
+              actorId,
+              lease,
+              record,
+              leaseDurationSeconds: configuration.leaseDurationSeconds,
+            }),
+            "CLAIM_INVALID",
+            "The research store returned an invalid source-resolution acceptance",
+          );
+        } catch (error) {
+          revoke("LEASE_LOST");
+          if (error instanceof LeaseAuthorityError) throw error;
+          throw new LeaseAuthorityError("LEASE_LOST");
+        }
+        if (
+          acceptanceResult.status === "COMMITTED" ||
+          acceptanceResult.status === "REPLAY"
+        ) {
+          const acceptedRecord = Object.fromEntries(
+            Object.entries(acceptanceResult.record).filter(
+              ([key]) =>
+                key !== "resolutionFingerprint" && key !== "acceptedAt",
+            ),
+          );
+          if (
+            !leaseContinues(lease, acceptanceResult.lease) ||
+            JSON.stringify(acceptedRecord) !== JSON.stringify(record)
+          ) {
+            revoke("LEASE_LOST");
+            throw new LeaseAuthorityError("LEASE_LOST");
+          }
+          lease = acceptanceResult.lease;
+          return acceptanceResult.record;
+        }
+        revoke(acceptanceResult.status);
+        throw new LeaseAuthorityError(acceptanceResult.status);
+      });
+    };
+
     const maintenance = (async () => {
       while (authority === "ACTIVE") {
         try {
@@ -986,6 +1060,7 @@ export function createDurableResearchWorkerService(
           signal: workAbort.signal,
           checkpoint,
           acceptProviderRun,
+          acceptSourceResolution,
         }),
       )
       .then(
@@ -1315,10 +1390,14 @@ export function createDurableResearchWorkerService(
         : invalidOutputFailure());
     const resumableHandoffIsSafe =
       failure.retryDirective === "RETRY_WITH_BACKOFF" &&
-      executorIdentity.execution.automaticRetrySafety ===
-        "RESUMABLE_PROVIDER_RUN" &&
-      providerCheckpoint?.providerRunId !== null &&
-      providerCheckpoint?.providerRunId !== undefined;
+      ((claim.job.stage === "RESOLUTION" &&
+        failure.code.startsWith("resolution-") &&
+        executorIdentity.execution.automaticRetrySafety ===
+          "IDEMPOTENT_PROVIDER_REQUEST") ||
+        (executorIdentity.execution.automaticRetrySafety ===
+          "RESUMABLE_PROVIDER_RUN" &&
+          providerCheckpoint?.providerRunId !== null &&
+          providerCheckpoint?.providerRunId !== undefined));
     if (resumableHandoffIsSafe) {
       try {
         const releaseResult = boundaryParse(

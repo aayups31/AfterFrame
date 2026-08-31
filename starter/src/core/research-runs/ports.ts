@@ -30,6 +30,11 @@ import type {
   ResearchProviderAcceptanceResult,
   ResearchProviderRunRecord,
 } from "@/core/research-runs/provider-runs";
+import type {
+  DurableSourceResolutionRecord,
+  SourceResolutionAcceptanceResult,
+  StoredSourceResolutionRecord,
+} from "@/core/research/source-resolution";
 
 export const START_RESEARCH_RUN_COMMAND = "start_research_run" as const;
 
@@ -174,6 +179,13 @@ export type CheckpointResearchJobInput = Readonly<{
 export type AcceptResearchProviderRunInput = CheckpointResearchJobInput &
   Readonly<{ providerRun: ResearchProviderRunRecord }>;
 
+export type AcceptSourceResolutionInput = Readonly<{
+  actorId: string;
+  lease: ResearchJobLeaseCursor;
+  record: DurableSourceResolutionRecord;
+  leaseDurationSeconds: number;
+}>;
+
 export type CompleteDurableResearchJobInput = Readonly<{
   actorId: string;
   lease: ResearchJobLeaseCursor;
@@ -213,6 +225,9 @@ export interface DurableResearchWorkerStore {
   acceptResearchProviderRun(
     input: AcceptResearchProviderRunInput,
   ): Promise<ResearchProviderAcceptanceResult>;
+  acceptSourceResolution(
+    input: AcceptSourceResolutionInput,
+  ): Promise<SourceResolutionAcceptanceResult>;
   completeResearchJob(
     input: CompleteDurableResearchJobInput,
   ): Promise<ResearchJobCompletionResult>;
@@ -237,6 +252,10 @@ export type DurableResearchStageExecutionInput = Readonly<{
     checkpoint: ResearchWorkerCheckpointProposal,
     providerRun: ResearchProviderRunRecord,
   ) => Promise<ResearchWorkerCheckpointRecord>;
+  /** Serialized with heartbeat and all other lease-fenced mutations. */
+  acceptSourceResolution?: (
+    record: DurableSourceResolutionRecord,
+  ) => Promise<StoredSourceResolutionRecord>;
 }>;
 
 /** External adapters sit behind this port; the application worker calls no provider directly. */

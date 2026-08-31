@@ -34,23 +34,6 @@ const record: DurableSourceResolutionRecord = {
   createdAt: T1,
 };
 
-const lease = {
-  schemaVersion: 1 as const,
-  runId: RUN_ID,
-  jobId: JOB_ID,
-  attemptId: ATTEMPT_ID,
-  workerId: "resolution-worker-1",
-  leaseToken: "resolution-lease-1",
-  leaseEpoch: 1,
-  runVersion: 4,
-  jobVersion: 2,
-  attemptVersion: 0,
-  claimedAt: T1,
-  heartbeatAt: T1,
-  expiresAt: "2026-08-25T16:05:00.000Z",
-  externalIdempotencyKey: "d".repeat(64),
-};
-
 const stored = {
   ...record,
   resolutionFingerprint: "e".repeat(64),
@@ -90,31 +73,6 @@ describe("SupabaseSourceResolutionPersistence", () => {
         p_attempt_id: ATTEMPT_ID,
       },
     );
-  });
-
-  it("accepts and parses one lease-fenced resolution decision", async () => {
-    const invokeRpc = vi.fn().mockResolvedValue({
-      data: { status: "COMMITTED", lease, record: stored },
-      error: null,
-    });
-    const persistence = new SupabaseSourceResolutionPersistence({
-      actorId: ACTOR_ID,
-      invokeRpc,
-    });
-    await expect(
-      persistence.acceptResolution({
-        actorId: ACTOR_ID,
-        lease,
-        record,
-        leaseDurationSeconds: 60,
-      }),
-    ).resolves.toMatchObject({ status: "COMMITTED", record: stored });
-    expect(invokeRpc).toHaveBeenCalledWith("af_accept_source_resolution_v1", {
-      p_actor_id: ACTOR_ID,
-      p_lease: lease,
-      p_record: record,
-      p_lease_seconds: 60,
-    });
   });
 
   it("recovers the exact accepted resolution ledger", async () => {

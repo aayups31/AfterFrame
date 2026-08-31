@@ -2,7 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { createIdentityResearchStageExecutor } from "@/application/research-worker/executors/identity-research-stage-executor";
 import { createScopingResearchStageExecutor } from "@/application/research-worker/executors/scoping-research-stage-executor";
 import { DiscoveryResearchStageExecutor } from "@/application/research-worker/executors/discovery-research-stage-executor";
+import { SourceResolutionStageExecutor } from "@/application/research-worker/executors/source-resolution-stage-executor";
 import type { DurableResearchDiscoveryProvider } from "@/application/research/durable-discovery-port";
+import type { SourceCandidateResolver } from "@/application/research/source-resolution-port";
 import type {
   DurableResearchStageExecutor,
   DurableResearchStageExecutorRegistry,
@@ -12,6 +14,7 @@ import type { SupabaseRpcInvoker } from "@/infrastructure/persistence/supabase-i
 import { SupabaseResearchIdentityReader } from "@/infrastructure/persistence/supabase-research-identity-reader";
 import { SupabaseResearchDiscoveryContextReader } from "@/infrastructure/persistence/supabase-research-discovery-context-reader";
 import { SupabaseResearchProviderRunReader } from "@/infrastructure/persistence/supabase-research-provider-run-reader";
+import { SupabaseSourceResolutionPersistence } from "@/infrastructure/persistence/supabase-source-resolution-persistence";
 import { TmdbSubjectIdentityResolver } from "@/specialists/movie/infrastructure/tmdb-subject-identity-resolver";
 import {
   createOpenAIBackgroundResearchDiscoveryProvider,
@@ -142,21 +145,25 @@ export class AfterFrameV1ResearchExecutorRegistry
   readonly #identityExecutor: DurableResearchStageExecutor;
   readonly #scopingExecutor: DurableResearchStageExecutor;
   readonly #discoveryExecutor: DurableResearchStageExecutor | null;
+  readonly #resolutionExecutor: DurableResearchStageExecutor | null;
 
   constructor(
     identityExecutor: DurableResearchStageExecutor,
     scopingExecutor: DurableResearchStageExecutor,
     discoveryExecutor: DurableResearchStageExecutor | null = null,
+    resolutionExecutor: DurableResearchStageExecutor | null = null,
   ) {
     this.#identityExecutor = identityExecutor;
     this.#scopingExecutor = scopingExecutor;
     this.#discoveryExecutor = discoveryExecutor;
+    this.#resolutionExecutor = resolutionExecutor;
   }
 
   resolve(stage: Parameters<DurableResearchStageExecutorRegistry["resolve"]>[0]) {
     if (stage === "IDENTITY") return this.#identityExecutor;
     if (stage === "SCOPING") return this.#scopingExecutor;
     if (stage === "DISCOVERY") return this.#discoveryExecutor;
+    if (stage === "RESOLUTION") return this.#resolutionExecutor;
     return null;
   }
 }
@@ -176,6 +183,10 @@ export type AfterFrameV1ResearchExecutorRegistryOptions = Readonly<{
     pollIntervalMs?: number;
     maxPollsPerExecution?: number;
     delay?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
+  }>;
+  resolution?: Readonly<{
+    resolver: SourceCandidateResolver;
+    maxCandidatesPerExecution?: number;
   }>;
 }>;
 
@@ -243,10 +254,35 @@ export function createAfterFrameV1ResearchExecutorRegistry(
             ? {}
             : { delay: options.discovery.delay }),
         });
+  const resolutionPersistence =
+    options.resolution === undefined
+      ? null
+      : new SupabaseSourceResolutionPersistence({
+          actorId: options.actorId,
+          invokeRpc: options.invokeRpc,
+        });
+  const resolutionExecutor =
+    options.resolution === undefined || resolutionPersistence === null
+      ? null
+      : new SourceResolutionStageExecutor({
+          context: resolutionPersistence,
+          records: resolutionPersistence,
+          resolver: options.resolution.resolver,
+          fingerprints: new Sha256ResearchRunFingerprintAdapter(),
+          execution: afterFrameV1SourceResolutionExecutionPlan(),
+          now: () => now().toISOString(),
+          ...(options.resolution.maxCandidatesPerExecution === undefined
+            ? {}
+            : {
+                maxCandidatesPerExecution:
+                  options.resolution.maxCandidatesPerExecution,
+              }),
+        });
   return new AfterFrameV1ResearchExecutorRegistry(
     identityExecutor,
     scopingExecutor,
     discoveryExecutor,
+    resolutionExecutor,
   );
 }
 
