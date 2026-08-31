@@ -5,6 +5,7 @@ import {
 } from "@/application/research-worker/execute-durable-research-job";
 import type {
   AcceptResearchProviderRunInput,
+  AcceptSourceResolutionInput,
   CheckpointResearchJobInput,
   ClaimResearchJobInput,
   CompleteDurableResearchJobInput,
@@ -316,6 +317,23 @@ class Store implements DurableResearchWorkerStore {
       lease: {
         ...input.lease,
         jobVersion: input.lease.jobVersion + 1,
+        heartbeatAt: T2,
+        expiresAt: T4,
+      },
+    };
+  }
+
+  async acceptSourceResolution(input: AcceptSourceResolutionInput) {
+    this.calls.push("accept-resolution");
+    return {
+      status: "COMMITTED" as const,
+      record: {
+        ...input.record,
+        resolutionFingerprint: "9".repeat(64),
+        acceptedAt: T2,
+      },
+      lease: {
+        ...input.lease,
         heartbeatAt: T2,
         expiresAt: T4,
       },
