@@ -11,6 +11,7 @@ import {
   type SourceNormalizationFailureCode,
 } from "@/core/research/source-normalization";
 import { IsoDateTimeSchema, Sha256Schema } from "@/core/shared/schemas";
+import { hostilePhraseMatches } from "@/infrastructure/research/hostile-content-patterns";
 
 const NORMALIZER = {
   id: "deterministic-hostile-document-normalizer",
@@ -191,26 +192,6 @@ function parseTag(rawTag: string) {
 
 function sourceRange(body: Uint8Array, start: number, end: number) {
   return sha256(body.subarray(start, end));
-}
-
-function hostilePhraseMatches(value: string) {
-  const patterns = [
-    ["INSTRUCTION_OVERRIDE", /\b(?:ignore|disregard|override)\s+(?:all\s+)?(?:previous|prior|system|developer)\s+instructions?\b/gi],
-    ["ROLE_IMPERSONATION", /(?:^|[\s\[<])(?:system|developer|assistant)\s*(?:message)?\s*[:>\]]/gi],
-    ["ROLE_IMPERSONATION", /\byou\s+are\s+(?:chatgpt|an?\s+ai\s+assistant|the\s+system)\b/gi],
-    ["TOOL_COMMAND", /\b(?:call|invoke|execute|run)\s+(?:the\s+)?(?:tool|function|shell|command)\b/gi],
-    ["SECRET_EXFILTRATION", /\b(?:reveal|send|upload|exfiltrate|print)\b[^.\n]{0,80}\b(?:api\s*key|password|credential|secret|system\s+prompt)\b/gi],
-    ["ENCODED_INSTRUCTION", /\b(?:[A-Za-z0-9+/]{120,}={0,2})\b/g],
-  ] as const;
-  const matches: Array<Readonly<{ code: HostileContentSignal["code"]; start: number; end: number }>> = [];
-  for (const [code, pattern] of patterns) {
-    pattern.lastIndex = 0;
-    for (const match of value.matchAll(pattern)) {
-      const start = match.index ?? 0;
-      matches.push({ code, start, end: start + match[0].length });
-    }
-  }
-  return matches.sort((left, right) => left.start - right.start || left.code.localeCompare(right.code));
 }
 
 function canonicalDocumentFingerprint(input: Readonly<{
