@@ -80,6 +80,10 @@ export const AfterFrameServerEnvironmentSchema = z
       .enum(["true", "false"])
       .default("false")
       .transform((value) => value === "true"),
+    AFTERFRAME_SOURCE_PAYLOAD_RETRIEVAL_ENABLED: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
   })
   .strict()
   .superRefine((environment, context) => {
@@ -117,6 +121,7 @@ const SERVER_ENV_KEYS = [
   "AFTERFRAME_RESEARCH_MODE",
   "OPENAI_RESEARCH_MODEL",
   "AFTERFRAME_SOURCE_METADATA_PROBE_ENABLED",
+  "AFTERFRAME_SOURCE_PAYLOAD_RETRIEVAL_ENABLED",
 ] as const;
 
 /** Reads only the server configuration AfterFrame owns; unrelated process env is ignored. */
@@ -147,5 +152,7 @@ export function serverEnvironmentReadiness(
     databaseConfigured: environment.SUPABASE_DB_URL.length > 0,
     sourceMetadataProbeEnabled:
       environment.AFTERFRAME_SOURCE_METADATA_PROBE_ENABLED,
+    sourcePayloadRetrievalEnabled:
+      environment.AFTERFRAME_SOURCE_PAYLOAD_RETRIEVAL_ENABLED,
   } as const;
 }
