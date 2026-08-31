@@ -194,9 +194,11 @@ begin
       receipt_json->>'declaredMediaType' = btrim(receipt_json->>'declaredMediaType')
       and char_length(receipt_json->>'declaredMediaType') between 1 and 200
     ))
-    and receipt_json->>'runId' = value_to_check->>'runId'
-    and receipt_json#>>'{retriever,id}' = value_to_check#>>'{retriever,id}'
-    and receipt_json#>>'{retriever,version}' = value_to_check#>>'{retriever,version}'
+    and (receipt_json->>'runId') = (value_to_check->>'runId')
+    and (receipt_json#>>'{retriever,id}') =
+      (value_to_check#>>'{retriever,id}')
+    and (receipt_json#>>'{retriever,version}') =
+      (value_to_check#>>'{retriever,version}')
     and receipt_json->>'accessState' = 'OPEN'
     and receipt_json->>'rightsState' in (
       'LINK_ONLY', 'PERMITTED', 'USER_OWNED', 'PUBLIC_DOMAIN', 'LICENSED'
@@ -297,8 +299,19 @@ begin
     on resolution_job.run_id = resolution.run_id
     and resolution_job.id = resolution.job_id
     and resolution_job.stage = 'RESOLUTION'
-    and resolution_job.active_attempt_id = resolution.attempt_id
     and resolution_job.status in ('SUCCEEDED', 'DEGRADED')
+  join public.af_research_attempts resolution_attempt
+    on resolution_attempt.run_id = resolution.run_id
+    and resolution_attempt.job_id = resolution.job_id
+    and resolution_attempt.id = resolution.attempt_id
+    and resolution_attempt.status in ('SUCCEEDED', 'DEGRADED')
+    and resolution_attempt.terminal_mutation_kind = 'COMPLETE'
+  join public.af_research_stage_outputs resolution_output
+    on resolution_output.run_id = resolution.run_id
+    and resolution_output.job_id = resolution.job_id
+    and resolution_output.attempt_id = resolution.attempt_id
+    and resolution_output.stage = 'RESOLUTION'
+    and resolution_output.kind = 'RESOLUTION_RESULT'
   where resolution.run_id = run_row.id and resolution.status = 'RESOLVED';
 
   return jsonb_build_object(
@@ -503,7 +516,7 @@ begin
 
     perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
       run_row.case_id::text || ':' || source_row.id::text || ':' ||
-        receipt_json->>'contentFingerprint', 0
+        (receipt_json->>'contentFingerprint'), 0
     ));
     select * into existing_snapshot from public.af_source_snapshots
     where case_id = run_row.case_id and source_id = source_row.id

@@ -178,6 +178,18 @@ function postgresErrorCode(error: unknown) {
   return undefined;
 }
 
+function postgresErrorDiagnostic(error: unknown) {
+  if (!(error instanceof Error)) return "unknown Postgres error";
+  const context =
+    typeof error === "object" &&
+    error !== null &&
+    "where" in error &&
+    typeof error.where === "string"
+      ? error.where
+      : null;
+  return context === null ? error.message : `${error.message} (${context})`;
+}
+
 type RpcFailure = Readonly<{
   functionName: string;
   code: string | undefined;
@@ -210,8 +222,7 @@ function transactionalRpcInvoker(
       recordFailure({
         functionName,
         code,
-        diagnostic:
-          error instanceof Error ? error.message : "unknown Postgres error",
+        diagnostic: postgresErrorDiagnostic(error),
       });
       return {
         data: null,

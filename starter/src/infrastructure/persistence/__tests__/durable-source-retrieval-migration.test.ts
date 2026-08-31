@@ -29,6 +29,21 @@ describe("migration 014 durable source retrieval acceptance", () => {
     expect(migration).toContain("lease_row.lease_expires_at <= observed_at");
   });
 
+  it("reads only resolution records committed by a terminal successful attempt", () => {
+    expect(migration).toContain(
+      "resolution_attempt.status in ('SUCCEEDED', 'DEGRADED')",
+    );
+    expect(migration).toContain(
+      "resolution_attempt.terminal_mutation_kind = 'COMPLETE'",
+    );
+    expect(migration).toContain(
+      "resolution_output.kind = 'RESOLUTION_RESULT'",
+    );
+    expect(migration).not.toContain(
+      "resolution_job.active_attempt_id = resolution.attempt_id",
+    );
+  });
+
   it("makes link-only bytes transient and retains zero instruction/publication authority", () => {
     expect(migration).toContain("receipt_json->>'retention' = 'TRANSIENT_ONLY'");
     expect(migration).toContain("receipt_json->'storageRef' = 'null'::jsonb");
@@ -41,10 +56,16 @@ describe("migration 014 durable source retrieval acceptance", () => {
     expect(migration).toContain(
       "publication_authority text not null check (publication_authority = 'NONE')",
     );
+    expect(migration).toContain(
+      "(receipt_json->>'runId') = (value_to_check->>'runId')",
+    );
   });
 
   it("uses advisory serialization, immutable fingerprint identity, and exact replay", () => {
     expect(migration).toContain("pg_advisory_xact_lock");
+    expect(migration).toContain(
+      "(receipt_json->>'contentFingerprint'), 0",
+    );
     expect(migration).toContain(
       "Content fingerprint already identifies another snapshot",
     );
