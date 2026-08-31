@@ -53,6 +53,12 @@ import {
   type DurableSourceResolutionRecord,
   type StoredSourceResolutionRecord,
 } from "@/core/research/source-resolution";
+import {
+  DurableSourceRetrievalRecordSchema,
+  SourceRetrievalAcceptanceResultSchema,
+  type DurableSourceRetrievalRecord,
+  type StoredSourceRetrievalRecord,
+} from "@/core/research/source-retrieval";
 
 export type ResearchWorkerIdentifierKind =
   | "research_attempt"
@@ -1019,6 +1025,74 @@ export function createDurableResearchWorkerService(
       });
     };
 
+    const acceptSourceRetrieval = async (
+      recordInput: DurableSourceRetrievalRecord,
+    ): Promise<StoredSourceRetrievalRecord> => {
+      const record = DurableSourceRetrievalRecordSchema.parse(recordInput);
+      if (
+        claim.job.stage !== "NORMALIZATION" ||
+        record.runId !== claim.run.id ||
+        record.jobId !== claim.job.id ||
+        record.attemptId !== claim.attempt.id ||
+        record.caseId !== claim.run.caseId ||
+        record.manifestFingerprint !==
+          claim.inputManifest.manifestFingerprint
+      ) {
+        throw new DurableResearchWorkerError(
+          "CLAIM_REJECTED",
+          "Source retrieval does not match the active normalization attempt",
+        );
+      }
+      const persistRetrieval = dependencies.store.acceptSourceRetrieval;
+      return serialize(async () => {
+        if (authority !== "ACTIVE" || !acceptingCheckpoints) {
+          throw new LeaseAuthorityError(
+            authority === "ACTIVE" ? "LEASE_LOST" : authority,
+          );
+        }
+        let acceptanceResult;
+        try {
+          acceptanceResult = boundaryParse(
+            SourceRetrievalAcceptanceResultSchema,
+            await persistRetrieval.call(dependencies.store, {
+              actorId,
+              lease,
+              record,
+              leaseDurationSeconds: configuration.leaseDurationSeconds,
+            }),
+            "CLAIM_INVALID",
+            "The research store returned an invalid source-retrieval acceptance",
+          );
+        } catch (error) {
+          revoke("LEASE_LOST");
+          if (error instanceof LeaseAuthorityError) throw error;
+          throw new LeaseAuthorityError("LEASE_LOST");
+        }
+        if (
+          acceptanceResult.status === "COMMITTED" ||
+          acceptanceResult.status === "REPLAY"
+        ) {
+          const acceptedRecord = Object.fromEntries(
+            Object.entries(acceptanceResult.record).filter(
+              ([key]) =>
+                key !== "retrievalFingerprint" && key !== "acceptedAt",
+            ),
+          );
+          if (
+            !leaseContinues(lease, acceptanceResult.lease) ||
+            JSON.stringify(acceptedRecord) !== JSON.stringify(record)
+          ) {
+            revoke("LEASE_LOST");
+            throw new LeaseAuthorityError("LEASE_LOST");
+          }
+          lease = acceptanceResult.lease;
+          return acceptanceResult.record;
+        }
+        revoke(acceptanceResult.status);
+        throw new LeaseAuthorityError(acceptanceResult.status);
+      });
+    };
+
     const maintenance = (async () => {
       while (authority === "ACTIVE") {
         try {
@@ -1061,6 +1135,7 @@ export function createDurableResearchWorkerService(
           checkpoint,
           acceptProviderRun,
           acceptSourceResolution,
+          acceptSourceRetrieval,
         }),
       )
       .then(

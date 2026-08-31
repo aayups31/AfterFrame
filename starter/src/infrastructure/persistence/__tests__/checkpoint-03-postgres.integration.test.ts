@@ -27,6 +27,7 @@ import {
 } from "@/infrastructure/persistence/supabase-investigation-store";
 import { SupabaseResearchRunStartStore } from "@/infrastructure/persistence/supabase-research-run-start-store";
 import { SupabaseResearchIdentityReader } from "@/infrastructure/persistence/supabase-research-identity-reader";
+import { SupabaseSourceRetrievalPersistence } from "@/infrastructure/persistence/supabase-source-retrieval-persistence";
 import {
   afterFrameV1IdentityExecutionPlan,
   afterFrameV1ScopingExecutionPlan,
@@ -41,7 +42,10 @@ const integrationEnabled =
   process.env.AFTERFRAME_DB_INTEGRATION === "1";
 const durableResolutionLifecycleEnabled =
   process.env.AFTERFRAME_DB_MIGRATION_013_PREFLIGHT === "1" ||
-  process.env.AFTERFRAME_DB_RESOLUTION_INTEGRATION === "1";
+  process.env.AFTERFRAME_DB_RESOLUTION_INTEGRATION === "1" ||
+  process.env.AFTERFRAME_DB_MIGRATION_014_PREFLIGHT === "1";
+const durableRetrievalLifecycleEnabled =
+  process.env.AFTERFRAME_DB_MIGRATION_014_PREFLIGHT === "1";
 const describeDatabase = integrationEnabled ? describe : describe.skip;
 const projectRoot = fileURLToPath(new URL("../../../../", import.meta.url));
 const rollbackSentinel = Symbol("checkpoint-03-rollback");
@@ -58,6 +62,15 @@ const durableResolutionMigration = readFileSync(
   fileURLToPath(
     new URL(
       "../../../../supabase/migrations/013_durable_source_resolution_acceptance.sql",
+      import.meta.url,
+    ),
+  ),
+  "utf8",
+);
+const durableRetrievalMigration = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../supabase/migrations/014_durable_source_retrieval_acceptance.sql",
       import.meta.url,
     ),
   ),
@@ -87,6 +100,9 @@ const allowedRpcNames = new Set<string>([
   "af_get_research_resolution_context_v1",
   "af_accept_source_resolution_v1",
   "af_get_source_resolution_records_v1",
+  "af_get_normalization_retrieval_context_v1",
+  "af_get_source_retrieval_records_v1",
+  "af_accept_source_retrieval_v1",
 ]);
 
 function loadDatabaseUrl() {
@@ -549,6 +565,9 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
           if (process.env.AFTERFRAME_DB_MIGRATION_013_PREFLIGHT === "1") {
             await client.query(durableResolutionMigration);
           }
+          if (process.env.AFTERFRAME_DB_MIGRATION_014_PREFLIGHT === "1") {
+            await client.query(durableRetrievalMigration);
+          }
           await seedCase(client, investigationCase, rootBranch);
           const invokeRpc = transactionalRpcInvoker(client, (failure) => {
             rpcFailure = failure;
@@ -905,6 +924,9 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
           }
           if (process.env.AFTERFRAME_DB_MIGRATION_013_PREFLIGHT === "1") {
             await client.query(durableResolutionMigration);
+          }
+          if (process.env.AFTERFRAME_DB_MIGRATION_014_PREFLIGHT === "1") {
+            await client.query(durableRetrievalMigration);
           }
           await seedCase(client, investigationCase, rootBranch);
           const invokeRpc = transactionalRpcInvoker(client, (failure) => {
@@ -1350,6 +1372,233 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
               outputs: "1",
               normalization_status: "QUEUED",
             });
+
+            if (durableRetrievalLifecycleEnabled) {
+              const normalizationStateResult = await client.query<{
+                run_version: string;
+                job_id: string;
+                job_version: string;
+              }>(
+                `select run.aggregate_version::text as run_version,
+                   job.id::text as job_id,
+                   job.aggregate_version::text as job_version
+                 from public.af_research_runs run
+                 join public.af_research_jobs job on job.run_id = run.id
+                 where run.id = $1 and job.stage = 'NORMALIZATION'`,
+                [started.bundle.run.id],
+              );
+              const normalizationState = normalizationStateResult.rows[0];
+              if (normalizationState === undefined) {
+                throw new Error("RESOLUTION did not expose NORMALIZATION");
+              }
+              const normalizationAttemptId = randomUUID();
+              const normalizationClaim = await workerStore.claimResearchJob({
+                actorId,
+                runId: started.bundle.run.id,
+                jobId: normalizationState.job_id,
+                stage: "NORMALIZATION",
+                expectedRunVersion: Number(normalizationState.run_version),
+                expectedJobVersion: Number(normalizationState.job_version),
+                idempotencyKey: "checkpoint-04d:normalization:claim:v1",
+                attemptId: normalizationAttemptId,
+                workerId: "checkpoint-04d-retrieval-worker-a",
+                execution: {
+                  executorId: "normalization-retrieval-executor",
+                  executorVersion: "1.0.0",
+                  configurationFingerprint: sha256(
+                    "checkpoint-04d-normalization-retrieval-config",
+                  ),
+                  executionKind: "RESOLVER",
+                  model: null,
+                  prompt: null,
+                  schema: {
+                    id: "source-retrieval-record",
+                    version: "1.0.0",
+                    schemaFingerprint: sha256(
+                      "checkpoint-04d-source-retrieval-record-schema",
+                    ),
+                  },
+                  tool: {
+                    id: "public-source-retriever",
+                    version: "1.0.0",
+                  },
+                  privateContentIncluded: true,
+                  automaticRetrySafety: "IDEMPOTENT_PROVIDER_REQUEST",
+                },
+                leaseDurationSeconds: 60,
+              });
+              expect(normalizationClaim.status).toBe("CLAIMED");
+              if (normalizationClaim.status !== "CLAIMED") {
+                throw new Error("NORMALIZATION retrieval was not claimed");
+              }
+
+              const retrievalPersistence =
+                new SupabaseSourceRetrievalPersistence({ actorId, invokeRpc });
+              const retrievalContext =
+                await retrievalPersistence.getNormalizationRetrievalContext({
+                  actorId,
+                  runId: started.bundle.run.id,
+                  jobId: normalizationState.job_id,
+                  attemptId: normalizationAttemptId,
+                });
+              expect(retrievalContext?.sources).toHaveLength(2);
+              if (retrievalContext === null) {
+                throw new Error("NORMALIZATION retrieval context was unavailable");
+              }
+              const [firstSource, secondSource] = retrievalContext.sources;
+              if (firstSource === undefined || secondSource === undefined) {
+                throw new Error("NORMALIZATION did not expose both resolved sources");
+              }
+              const makeRecord = (
+                sourceContext: typeof firstSource,
+                createdAt: string,
+              ) => ({
+                schemaVersion: 1 as const,
+                id: randomUUID(),
+                runId: retrievalContext.runId,
+                jobId: retrievalContext.jobId,
+                attemptId: retrievalContext.attemptId,
+                caseId: retrievalContext.caseId,
+                manifestFingerprint: retrievalContext.manifestFingerprint,
+                resolutionRecordId: sourceContext.resolutionRecordId,
+                idempotencyKey: `checkpoint-04d:retrieve:${sourceContext.candidate.id}`,
+                policy: {
+                  id: "lawful-source-retrieval",
+                  version: "1.0.0",
+                },
+                retriever: {
+                  id: "public-source-retriever",
+                  version: "1.0.0",
+                },
+                result: {
+                  status: "RETRIEVED" as const,
+                  receipt: {
+                    schemaVersion: 1 as const,
+                    id: randomUUID(),
+                    snapshotId: randomUUID(),
+                    runId: retrievalContext.runId,
+                    candidateId: sourceContext.candidate.id,
+                    sourceId: sourceContext.source.id,
+                    sourceLocatorId: sourceContext.locator.id,
+                    requestedUrl: sourceContext.source.canonicalUrl!,
+                    finalUrl: sourceContext.source.canonicalUrl!,
+                    redirectChainFingerprint: sha256(
+                      JSON.stringify([sourceContext.source.canonicalUrl]),
+                    ),
+                    declaredMediaType: "text/html; charset=utf-8",
+                    verifiedMediaType: "text/html",
+                    wireContentLength: 128,
+                    decodedContentLength: 128,
+                    contentFingerprint: sha256(
+                      `checkpoint-04d-hostile-bytes:${sourceContext.candidate.id}`,
+                    ),
+                    retention: "TRANSIENT_ONLY" as const,
+                    storageRef: null,
+                    accessState: "OPEN" as const,
+                    rightsState: "LINK_ONLY" as const,
+                    trustBoundary: "UNTRUSTED_SOURCE_DATA" as const,
+                    instructionAuthority: "NONE" as const,
+                    screeningState: "UNSCREENED" as const,
+                    publicationAuthority: "NONE" as const,
+                    retriever: {
+                      id: "public-source-retriever",
+                      version: "1.0.0",
+                    },
+                    capturedAt: createdAt,
+                  },
+                },
+                createdAt,
+              });
+
+              const firstRecord = makeRecord(
+                firstSource,
+                await databaseTimestamp(client),
+              );
+              const firstAccepted = await workerStore.acceptSourceRetrieval({
+                actorId,
+                lease: normalizationClaim.claim.lease,
+                record: firstRecord,
+                leaseDurationSeconds: 60,
+              });
+              expect(firstAccepted.status).toBe("COMMITTED");
+              if (firstAccepted.status !== "COMMITTED") {
+                throw new Error("First retrieval was not committed");
+              }
+              const firstReplay = await workerStore.acceptSourceRetrieval({
+                actorId,
+                lease: firstAccepted.lease,
+                record: firstRecord,
+                leaseDurationSeconds: 60,
+              });
+              expect(firstReplay).toMatchObject({
+                status: "REPLAY",
+                record: firstAccepted.record,
+              });
+              if (firstReplay.status !== "REPLAY") {
+                throw new Error("First retrieval did not replay exactly");
+              }
+
+              const secondRecord = makeRecord(
+                secondSource,
+                await databaseTimestamp(client),
+              );
+              const staleAcceptance = await workerStore.acceptSourceRetrieval({
+                actorId,
+                lease: normalizationClaim.claim.lease,
+                record: secondRecord,
+                leaseDurationSeconds: 60,
+              });
+              expect(staleAcceptance).toEqual({ status: "LEASE_LOST" });
+
+              const secondAccepted = await workerStore.acceptSourceRetrieval({
+                actorId,
+                lease: firstReplay.lease,
+                record: secondRecord,
+                leaseDurationSeconds: 60,
+              });
+              expect(secondAccepted.status).toBe("COMMITTED");
+
+              const acceptedRetrievals =
+                await retrievalPersistence.listAcceptedRetrievals({
+                  actorId,
+                  runId: retrievalContext.runId,
+                  jobId: retrievalContext.jobId,
+                  attemptId: retrievalContext.attemptId,
+                });
+              expect(acceptedRetrievals).toHaveLength(2);
+              expect(
+                acceptedRetrievals.every(
+                  (record) =>
+                    record.result.status === "RETRIEVED" &&
+                    record.result.receipt.retention === "TRANSIENT_ONLY" &&
+                    record.result.receipt.storageRef === null,
+                ),
+              ).toBe(true);
+
+              const retrievalCounts = await client.query<{
+                receipts: string;
+                snapshots: string;
+                retained_bodies: string;
+              }>(
+                `select
+                   (select count(*)::text
+                      from public.af_source_retrieval_records
+                      where run_id = $1) as receipts,
+                   (select count(*)::text
+                      from public.af_source_snapshots
+                      where created_by_run_id = $1) as snapshots,
+                   (select count(*)::text
+                      from public.af_source_snapshots
+                      where created_by_run_id = $1 and storage_ref is not null)
+                     as retained_bodies`,
+                [retrievalContext.runId],
+              );
+              expect(retrievalCounts.rows[0]).toEqual({
+                receipts: "2",
+                snapshots: "2",
+                retained_bodies: "0",
+              });
+            }
           }
 
           const durableCounts = await client.query<{
@@ -1391,16 +1640,20 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
           );
           expect(durableCounts.rows[0]).toEqual({
             attempts:
-              durableResolutionLifecycleEnabled
-                ? "4"
-                : "3",
+              durableRetrievalLifecycleEnabled
+                ? "5"
+                : durableResolutionLifecycleEnabled
+                  ? "4"
+                  : "3",
             checkpoints: durableResolutionLifecycleEnabled ? "3" : "2",
             handoffs: durableResolutionLifecycleEnabled ? "2" : "1",
             identities: "1",
             manifests:
-              durableResolutionLifecycleEnabled
-                ? "4"
-                : "3",
+              durableRetrievalLifecycleEnabled
+                ? "5"
+                : durableResolutionLifecycleEnabled
+                  ? "4"
+                  : "3",
             outputs:
               durableResolutionLifecycleEnabled
                 ? "4"

@@ -4,6 +4,16 @@ import {
   SourceRetrievalGrantSchema,
   SourceRetrievalPolicyInputSchema,
   SourceRetrievalReceiptSchema,
+  DurableNormalizationRetrievalContextSchema,
+  DurableSourceRetrievalRecordSchema,
+  SourceRetrievalAcceptanceResultSchema,
+  SourceRetrievalResultSchema,
+  StoredSourceRetrievalRecordSchema,
+  type DurableNormalizationRetrievalContext,
+  type DurableSourceRetrievalRecord,
+  type SourceRetrievalAcceptanceResult,
+  type SourceRetrievalResult,
+  type StoredSourceRetrievalRecord,
   type SourceRetrievalDecision,
   type SourceRetrievalGrant,
   type SourceRetrievalPolicyInput,
@@ -16,12 +26,22 @@ export {
   SourceRetrievalGrantSchema,
   SourceRetrievalPolicyInputSchema,
   SourceRetrievalReceiptSchema,
+  DurableNormalizationRetrievalContextSchema,
+  DurableSourceRetrievalRecordSchema,
+  SourceRetrievalAcceptanceResultSchema,
+  SourceRetrievalResultSchema,
+  StoredSourceRetrievalRecordSchema,
 };
 export type {
   SourceRetrievalDecision,
   SourceRetrievalGrant,
   SourceRetrievalPolicyInput,
   SourceRetrievalReceipt,
+  DurableNormalizationRetrievalContext,
+  DurableSourceRetrievalRecord,
+  SourceRetrievalAcceptanceResult,
+  SourceRetrievalResult,
+  StoredSourceRetrievalRecord,
 };
 
 export const RetrievedSourcePayloadMetadataSchema = z
@@ -65,4 +85,22 @@ export interface SourcePayloadRetentionStore {
     contentFingerprint: string;
     body: Uint8Array;
   }>): Promise<Readonly<{ storageRef: string }>>;
+}
+
+export interface DurableNormalizationRetrievalContextReader {
+  getNormalizationRetrievalContext(input: Readonly<{
+    actorId: string;
+    runId: string;
+    jobId: string;
+    attemptId: string;
+  }>): Promise<DurableNormalizationRetrievalContext | null>;
+}
+
+export interface DurableSourceRetrievalRecordReader {
+  listAcceptedRetrievals(input: Readonly<{
+    actorId: string;
+    runId: string;
+    jobId: string;
+    attemptId: string;
+  }>): Promise<readonly StoredSourceRetrievalRecord[]>;
 }

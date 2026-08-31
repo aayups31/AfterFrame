@@ -11,6 +11,7 @@ import type {
   CheckpointResearchJobInput,
   AcceptResearchProviderRunInput,
   AcceptSourceResolutionInput,
+  AcceptSourceRetrievalInput,
   ClaimResearchJobInput,
   CompleteDurableResearchJobInput,
   DurableResearchWorkerStore,
@@ -23,6 +24,10 @@ import {
   DurableSourceResolutionRecordSchema,
   SourceResolutionAcceptanceResultSchema,
 } from "@/core/research/source-resolution";
+import {
+  DurableSourceRetrievalRecordSchema,
+  SourceRetrievalAcceptanceResultSchema,
+} from "@/core/research/source-retrieval";
 import {
   ResearchJobCheckpointResultSchema,
   ResearchJobClaimResultSchema,
@@ -239,6 +244,31 @@ export class SupabaseDurableResearchWorkerStore
       p_lease_seconds: input.leaseDurationSeconds,
     });
     return parseRpcContract(SourceResolutionAcceptanceResultSchema, data);
+  }
+
+  async acceptSourceRetrieval(input: AcceptSourceRetrievalInput) {
+    this.#assertActor(input.actorId);
+    if (
+      !Number.isInteger(input.leaseDurationSeconds) ||
+      input.leaseDurationSeconds < 5 ||
+      input.leaseDurationSeconds > 900
+    ) {
+      throw new SupabaseDurableResearchWorkerError(
+        "INVALID_ATOMIC_MUTATION",
+        "The source-retrieval lease duration is invalid",
+      );
+    }
+    const record = parseCommand(
+      DurableSourceRetrievalRecordSchema,
+      input.record,
+    );
+    const data = await this.#rpc("af_accept_source_retrieval_v1", {
+      p_actor_id: this.#actorId,
+      p_lease: input.lease,
+      p_record: record,
+      p_lease_seconds: input.leaseDurationSeconds,
+    });
+    return parseRpcContract(SourceRetrievalAcceptanceResultSchema, data);
   }
 
   async completeResearchJob(input: CompleteDurableResearchJobInput) {

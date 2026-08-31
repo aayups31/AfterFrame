@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { SourceLocatorSchema, SourceRecordSchema } from "@/core/research/schemas";
+import { SourceCandidateRecordSchema } from "@/core/research-runs/schemas";
+import { ResearchJobLeaseCursorSchema } from "@/core/research-runs/worker-schemas";
 import {
   EntityIdSchema,
   HttpUrlSchema,
@@ -67,6 +69,7 @@ export const SourceRetrievalReceiptSchema = z
   .object({
     schemaVersion: z.literal(1),
     id: EntityIdSchema,
+    snapshotId: EntityIdSchema,
     runId: EntityIdSchema,
     candidateId: EntityIdSchema,
     sourceId: EntityIdSchema,
@@ -138,6 +141,131 @@ export const SourceRetrievalFailureCodeSchema = z.enum([
   "retrieval-contract-invalid",
 ]);
 
+export const SourceRetrievalResultSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      status: z.literal("RETRIEVED"),
+      receipt: SourceRetrievalReceiptSchema,
+    })
+    .strict(),
+  z
+    .object({
+      status: z.literal("UNAVAILABLE"),
+      candidateId: EntityIdSchema,
+      sourceId: EntityIdSchema,
+      sourceLocatorId: EntityIdSchema,
+      code: SourceRetrievalFailureCodeSchema,
+      instructionAuthority: z.literal("NONE"),
+      publicationAuthority: z.literal("NONE"),
+    })
+    .strict(),
+]);
+
+export const DurableSourceRetrievalRecordSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    id: EntityIdSchema,
+    runId: EntityIdSchema,
+    jobId: EntityIdSchema,
+    attemptId: EntityIdSchema,
+    caseId: EntityIdSchema,
+    manifestFingerprint: Sha256Schema,
+    resolutionRecordId: EntityIdSchema,
+    idempotencyKey: OpaqueReferenceSchema,
+    policy: z.object({ id: SlugSchema, version: VersionTagSchema }).strict(),
+    retriever: z.object({ id: SlugSchema, version: VersionTagSchema }).strict(),
+    result: SourceRetrievalResultSchema,
+    createdAt: IsoDateTimeSchema,
+  })
+  .strict()
+  .superRefine((record, context) => {
+    if (
+      record.result.status === "RETRIEVED" &&
+      (record.result.receipt.runId !== record.runId ||
+        record.result.receipt.retriever.id !== record.retriever.id ||
+        record.result.receipt.retriever.version !== record.retriever.version ||
+        record.result.receipt.screeningState !== "UNSCREENED")
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["result", "receipt"],
+        message: "Retrieval receipt must match its durable run and retriever",
+      });
+    }
+  });
+
+export const StoredSourceRetrievalRecordSchema =
+  DurableSourceRetrievalRecordSchema.safeExtend({
+    retrievalFingerprint: Sha256Schema,
+    acceptedAt: IsoDateTimeSchema,
+  }).strict();
+
+export const SourceRetrievalAcceptanceResultSchema = z.discriminatedUnion(
+  "status",
+  [
+    z
+      .object({
+        status: z.enum(["COMMITTED", "REPLAY"]),
+        lease: ResearchJobLeaseCursorSchema,
+        record: StoredSourceRetrievalRecordSchema,
+      })
+      .strict(),
+    z.object({ status: z.literal("LEASE_LOST") }).strict(),
+    z.object({ status: z.literal("CANCELLED") }).strict(),
+  ],
+);
+
+export const NormalizationRetrievalSourceSchema = z
+  .object({
+    candidate: SourceCandidateRecordSchema,
+    resolutionRecordId: EntityIdSchema,
+    resolutionFingerprint: Sha256Schema,
+    source: SourceRecordSchema,
+    locator: SourceLocatorSchema,
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      value.candidate.id === "" ||
+      value.source.id !== value.locator.sourceId ||
+      value.source.medium !== value.locator.kind ||
+      value.source.canonicalUrl !== value.locator.openUrl
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Normalization source, locator, and candidate lineage must agree",
+      });
+    }
+  });
+
+export const DurableNormalizationRetrievalContextSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    runId: EntityIdSchema,
+    jobId: EntityIdSchema,
+    attemptId: EntityIdSchema,
+    caseId: EntityIdSchema,
+    manifestFingerprint: Sha256Schema,
+    sources: z.array(NormalizationRetrievalSourceSchema).max(500),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const candidateIds = new Set<string>();
+    value.sources.forEach((source, index) => {
+      if (
+        candidateIds.has(source.candidate.id) ||
+        source.candidate.runId !== value.runId
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["sources", index],
+          message: "Normalization retrieval sources must be unique and belong to the run",
+        });
+      }
+      candidateIds.add(source.candidate.id);
+    });
+  });
+
 export type SourceRetrievalPolicyInput = z.infer<
   typeof SourceRetrievalPolicyInputSchema
 >;
@@ -150,4 +278,17 @@ export type SourceRetrievalReceipt = z.infer<
 >;
 export type SourceRetrievalFailureCode = z.infer<
   typeof SourceRetrievalFailureCodeSchema
+>;
+export type SourceRetrievalResult = z.infer<typeof SourceRetrievalResultSchema>;
+export type DurableSourceRetrievalRecord = z.infer<
+  typeof DurableSourceRetrievalRecordSchema
+>;
+export type StoredSourceRetrievalRecord = z.infer<
+  typeof StoredSourceRetrievalRecordSchema
+>;
+export type SourceRetrievalAcceptanceResult = z.infer<
+  typeof SourceRetrievalAcceptanceResultSchema
+>;
+export type DurableNormalizationRetrievalContext = z.infer<
+  typeof DurableNormalizationRetrievalContextSchema
 >;

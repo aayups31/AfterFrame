@@ -176,6 +176,7 @@ describe("source retrieval hostile-data contracts", () => {
   const receipt = {
     schemaVersion: 1,
     id: "83000000-0000-4000-8000-000000000006",
+    snapshotId: "83000000-0000-4000-8000-000000000007",
     runId: RUN_ID,
     candidateId: CANDIDATE_ID,
     sourceId: SOURCE_ID,

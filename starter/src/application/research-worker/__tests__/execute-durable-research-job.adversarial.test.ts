@@ -6,6 +6,7 @@ import {
 import type {
   AcceptResearchProviderRunInput,
   AcceptSourceResolutionInput,
+  AcceptSourceRetrievalInput,
   CheckpointResearchJobInput,
   ClaimResearchJobInput,
   CompleteDurableResearchJobInput,
@@ -330,6 +331,23 @@ class Store implements DurableResearchWorkerStore {
       record: {
         ...input.record,
         resolutionFingerprint: "9".repeat(64),
+        acceptedAt: T2,
+      },
+      lease: {
+        ...input.lease,
+        heartbeatAt: T2,
+        expiresAt: T4,
+      },
+    };
+  }
+
+  async acceptSourceRetrieval(input: AcceptSourceRetrievalInput) {
+    this.calls.push("accept-retrieval");
+    return {
+      status: "COMMITTED" as const,
+      record: {
+        ...input.record,
+        retrievalFingerprint: "8".repeat(64),
         acceptedAt: T2,
       },
       lease: {

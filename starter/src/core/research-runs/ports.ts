@@ -35,6 +35,11 @@ import type {
   SourceResolutionAcceptanceResult,
   StoredSourceResolutionRecord,
 } from "@/core/research/source-resolution";
+import type {
+  DurableSourceRetrievalRecord,
+  SourceRetrievalAcceptanceResult,
+  StoredSourceRetrievalRecord,
+} from "@/core/research/source-retrieval";
 
 export const START_RESEARCH_RUN_COMMAND = "start_research_run" as const;
 
@@ -186,6 +191,13 @@ export type AcceptSourceResolutionInput = Readonly<{
   leaseDurationSeconds: number;
 }>;
 
+export type AcceptSourceRetrievalInput = Readonly<{
+  actorId: string;
+  lease: ResearchJobLeaseCursor;
+  record: DurableSourceRetrievalRecord;
+  leaseDurationSeconds: number;
+}>;
+
 export type CompleteDurableResearchJobInput = Readonly<{
   actorId: string;
   lease: ResearchJobLeaseCursor;
@@ -228,6 +240,9 @@ export interface DurableResearchWorkerStore {
   acceptSourceResolution(
     input: AcceptSourceResolutionInput,
   ): Promise<SourceResolutionAcceptanceResult>;
+  acceptSourceRetrieval(
+    input: AcceptSourceRetrievalInput,
+  ): Promise<SourceRetrievalAcceptanceResult>;
   completeResearchJob(
     input: CompleteDurableResearchJobInput,
   ): Promise<ResearchJobCompletionResult>;
@@ -256,6 +271,10 @@ export type DurableResearchStageExecutionInput = Readonly<{
   acceptSourceResolution?: (
     record: DurableSourceResolutionRecord,
   ) => Promise<StoredSourceResolutionRecord>;
+  /** Serialized hostile-source receipt acceptance for NORMALIZATION only. */
+  acceptSourceRetrieval?: (
+    record: DurableSourceRetrievalRecord,
+  ) => Promise<StoredSourceRetrievalRecord>;
 }>;
 
 /** External adapters sit behind this port; the application worker calls no provider directly. */
