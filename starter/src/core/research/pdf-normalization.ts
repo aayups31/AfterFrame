@@ -1,5 +1,14 @@
 import { z } from "zod";
-import { IsoDateTimeSchema, Sha256Schema, SlugSchema, VersionTagSchema } from "@/core/shared/schemas";
+import { AccessStateSchema, RightsStateSchema } from "@/core/research/schemas";
+import { ResearchJobLeaseCursorSchema } from "@/core/research-runs/worker-schemas";
+import {
+  EntityIdSchema,
+  IsoDateTimeSchema,
+  OpaqueReferenceSchema,
+  Sha256Schema,
+  SlugSchema,
+  VersionTagSchema,
+} from "@/core/shared/schemas";
 
 const PdfFiniteNumberSchema = z.number().finite().min(-1_000_000).max(1_000_000);
 
@@ -156,5 +165,138 @@ export const ExtractedPdfDocumentSchema = z
     }
   });
 
+export const PdfBlockManifestSchema = PdfNormalizedBlockSchema.omit({
+  text: true,
+  trustBoundary: true,
+  reviewState: true,
+}).safeExtend({ textLength: z.number().int().positive().max(20_000) }).strict();
+
+export const PdfDocumentReceiptSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    id: EntityIdSchema,
+    runId: EntityIdSchema,
+    candidateId: EntityIdSchema,
+    retrievalRecordId: EntityIdSchema,
+    snapshotId: EntityIdSchema,
+    sourceId: EntityIdSchema,
+    sourceLocatorId: EntityIdSchema,
+    contentFingerprint: Sha256Schema,
+    documentFingerprint: Sha256Schema,
+    documentKind: z.literal("PDF"),
+    verifiedMediaType: z.literal("application/pdf"),
+    sourceByteLength: z.number().int().positive().max(50_000_000),
+    pageCount: z.number().int().positive().max(2_000),
+    normalizedTextLength: z.number().int().nonnegative().max(5_000_000),
+    pageManifests: z.array(ExtractedPdfPageSchema).min(1).max(2_000),
+    blockManifests: z.array(PdfBlockManifestSchema).max(100_000),
+    screeningState: z.enum(["PASSED", "QUARANTINED"]),
+    hostileSignals: z.array(PdfHostileContentSignalSchema).max(100),
+    retention: z.enum(["TRANSIENT_ONLY", "RETAINABLE"]),
+    storageRef: OpaqueReferenceSchema.nullable(),
+    accessState: AccessStateSchema,
+    rightsState: RightsStateSchema,
+    normalizer: z.object({ id: SlugSchema, version: VersionTagSchema }).strict(),
+    libraryVersion: VersionTagSchema,
+    normalizedAt: IsoDateTimeSchema,
+    trustBoundary: z.literal("UNTRUSTED_SOURCE_DATA"),
+    instructionAuthority: z.literal("NONE"),
+    evidenceStatus: z.literal("NOT_EVIDENCE"),
+    reviewState: z.literal("PROPOSED"),
+    publicationAuthority: z.literal("NONE"),
+  })
+  .strict()
+  .superRefine((receipt, context) => {
+    const storageEligibleRights = new Set(["PERMITTED", "USER_OWNED", "PUBLIC_DOMAIN", "LICENSED"]);
+    if (receipt.pageManifests.length !== receipt.pageCount) {
+      context.addIssue({ code: "custom", path: ["pageManifests"], message: "PDF receipt requires every page manifest" });
+    }
+    if (receipt.retention === "TRANSIENT_ONLY" && receipt.storageRef !== null) {
+      context.addIssue({ code: "custom", path: ["storageRef"], message: "Transient PDF output cannot retain storage" });
+    }
+    if (receipt.retention === "RETAINABLE" && (receipt.storageRef === null || !storageEligibleRights.has(receipt.rightsState))) {
+      context.addIssue({ code: "custom", path: ["storageRef"], message: "Retained PDF output requires storage-eligible rights" });
+    }
+    if (receipt.rightsState === "LINK_ONLY" && receipt.retention !== "TRANSIENT_ONLY") {
+      context.addIssue({ code: "custom", path: ["retention"], message: "LINK_ONLY PDF output must remain transient" });
+    }
+    if (receipt.screeningState === "QUARANTINED" && (receipt.retention !== "TRANSIENT_ONLY" || receipt.storageRef !== null)) {
+      context.addIssue({ code: "custom", path: ["screeningState"], message: "Quarantined PDF output cannot be retained" });
+    }
+    if ((receipt.screeningState === "PASSED") !== (receipt.hostileSignals.length === 0)) {
+      context.addIssue({ code: "custom", path: ["screeningState"], message: "Only signal-free PDF receipts may pass screening" });
+    }
+    const pageFingerprints = new Map(receipt.pageManifests.map((page) => [page.pageNumber, page.pageTextFingerprint]));
+    const totalLength = receipt.blockManifests.reduce((total, block, index) => {
+      if (block.ordinal !== index || pageFingerprints.get(block.anchor.pageNumber) !== block.anchor.pageTextFingerprint) {
+        context.addIssue({ code: "custom", path: ["blockManifests", index], message: "PDF block manifest does not match its page" });
+      }
+      return total + block.textLength;
+    }, 0);
+    if (totalLength !== receipt.normalizedTextLength) {
+      context.addIssue({ code: "custom", path: ["normalizedTextLength"], message: "PDF receipt text length must equal its block manifest" });
+    }
+  });
+
+export const PdfNormalizationResultSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("NORMALIZED"), receipt: PdfDocumentReceiptSchema }).strict(),
+  z.object({
+    status: z.literal("UNAVAILABLE"),
+    candidateId: EntityIdSchema,
+    retrievalRecordId: EntityIdSchema,
+    sourceId: EntityIdSchema,
+    sourceLocatorId: EntityIdSchema,
+    code: PdfExtractionFailureCodeSchema,
+    instructionAuthority: z.literal("NONE"),
+    publicationAuthority: z.literal("NONE"),
+  }).strict(),
+]);
+
+export const DurablePdfNormalizationRecordSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    id: EntityIdSchema,
+    runId: EntityIdSchema,
+    jobId: EntityIdSchema,
+    attemptId: EntityIdSchema,
+    caseId: EntityIdSchema,
+    manifestFingerprint: Sha256Schema,
+    retrievalRecordId: EntityIdSchema,
+    idempotencyKey: OpaqueReferenceSchema,
+    normalizer: z.object({ id: SlugSchema, version: VersionTagSchema }).strict(),
+    result: PdfNormalizationResultSchema,
+    createdAt: IsoDateTimeSchema,
+  })
+  .strict()
+  .superRefine((record, context) => {
+    if (record.result.status === "NORMALIZED" && (
+      record.result.receipt.runId !== record.runId ||
+      record.result.receipt.retrievalRecordId !== record.retrievalRecordId ||
+      record.result.receipt.normalizer.id !== record.normalizer.id ||
+      record.result.receipt.normalizer.version !== record.normalizer.version
+    )) {
+      context.addIssue({ code: "custom", path: ["result", "receipt"], message: "PDF receipt must match its durable lineage" });
+    }
+  });
+
+export const StoredPdfNormalizationRecordSchema = DurablePdfNormalizationRecordSchema.safeExtend({
+  normalizationFingerprint: Sha256Schema,
+  acceptedAt: IsoDateTimeSchema,
+}).strict();
+
+export const PdfNormalizationAcceptanceResultSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.enum(["COMMITTED", "REPLAY"]),
+    lease: ResearchJobLeaseCursorSchema,
+    record: StoredPdfNormalizationRecordSchema,
+  }).strict(),
+  z.object({ status: z.literal("LEASE_LOST") }).strict(),
+  z.object({ status: z.literal("CANCELLED") }).strict(),
+]);
+
 export type ExtractedPdfDocument = z.infer<typeof ExtractedPdfDocumentSchema>;
 export type PdfExtractionFailureCode = z.infer<typeof PdfExtractionFailureCodeSchema>;
+export type PdfDocumentReceipt = z.infer<typeof PdfDocumentReceiptSchema>;
+export type DurablePdfNormalizationRecord = z.infer<typeof DurablePdfNormalizationRecordSchema>;
+export type StoredPdfNormalizationRecord = z.infer<typeof StoredPdfNormalizationRecordSchema>;
+export type PdfNormalizationAcceptanceResult = z.infer<typeof PdfNormalizationAcceptanceResultSchema>;

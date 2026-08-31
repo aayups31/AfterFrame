@@ -13,6 +13,7 @@ import type {
   AcceptSourceResolutionInput,
   AcceptSourceRetrievalInput,
   AcceptSourceNormalizationInput,
+  AcceptPdfNormalizationInput,
   ClaimResearchJobInput,
   CompleteDurableResearchJobInput,
   DurableResearchWorkerStore,
@@ -33,6 +34,10 @@ import {
   DurableSourceNormalizationRecordSchema,
   SourceNormalizationAcceptanceResultSchema,
 } from "@/core/research/source-normalization";
+import {
+  DurablePdfNormalizationRecordSchema,
+  PdfNormalizationAcceptanceResultSchema,
+} from "@/core/research/pdf-normalization";
 import {
   ResearchJobCheckpointResultSchema,
   ResearchJobClaimResultSchema,
@@ -299,6 +304,24 @@ export class SupabaseDurableResearchWorkerStore
       p_lease_seconds: input.leaseDurationSeconds,
     });
     return parseRpcContract(SourceNormalizationAcceptanceResultSchema, data);
+  }
+
+  async acceptPdfNormalization(input: AcceptPdfNormalizationInput) {
+    this.#assertActor(input.actorId);
+    if (!Number.isInteger(input.leaseDurationSeconds) || input.leaseDurationSeconds < 5 || input.leaseDurationSeconds > 900) {
+      throw new SupabaseDurableResearchWorkerError(
+        "INVALID_ATOMIC_MUTATION",
+        "The PDF-normalization lease duration is invalid",
+      );
+    }
+    const record = parseCommand(DurablePdfNormalizationRecordSchema, input.record);
+    const data = await this.#rpc("af_accept_pdf_normalization_v1", {
+      p_actor_id: this.#actorId,
+      p_lease: input.lease,
+      p_record: record,
+      p_lease_seconds: input.leaseDurationSeconds,
+    });
+    return parseRpcContract(PdfNormalizationAcceptanceResultSchema, data);
   }
 
   async completeResearchJob(input: CompleteDurableResearchJobInput) {

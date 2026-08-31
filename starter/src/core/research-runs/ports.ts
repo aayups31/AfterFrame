@@ -45,6 +45,11 @@ import type {
   SourceNormalizationAcceptanceResult,
   StoredSourceNormalizationRecord,
 } from "@/core/research/source-normalization";
+import type {
+  DurablePdfNormalizationRecord,
+  PdfNormalizationAcceptanceResult,
+  StoredPdfNormalizationRecord,
+} from "@/core/research/pdf-normalization";
 
 export const START_RESEARCH_RUN_COMMAND = "start_research_run" as const;
 
@@ -210,6 +215,13 @@ export type AcceptSourceNormalizationInput = Readonly<{
   leaseDurationSeconds: number;
 }>;
 
+export type AcceptPdfNormalizationInput = Readonly<{
+  actorId: string;
+  lease: ResearchJobLeaseCursor;
+  record: DurablePdfNormalizationRecord;
+  leaseDurationSeconds: number;
+}>;
+
 export type CompleteDurableResearchJobInput = Readonly<{
   actorId: string;
   lease: ResearchJobLeaseCursor;
@@ -258,6 +270,9 @@ export interface DurableResearchWorkerStore {
   acceptSourceNormalization(
     input: AcceptSourceNormalizationInput,
   ): Promise<SourceNormalizationAcceptanceResult>;
+  acceptPdfNormalization?(
+    input: AcceptPdfNormalizationInput,
+  ): Promise<PdfNormalizationAcceptanceResult>;
   completeResearchJob(
     input: CompleteDurableResearchJobInput,
   ): Promise<ResearchJobCompletionResult>;
@@ -294,6 +309,10 @@ export type DurableResearchStageExecutionInput = Readonly<{
   acceptSourceNormalization?: (
     record: DurableSourceNormalizationRecord,
   ) => Promise<StoredSourceNormalizationRecord>;
+  /** Serialized text-free PDF page/item receipt acceptance for NORMALIZATION only. */
+  acceptPdfNormalization?: (
+    record: DurablePdfNormalizationRecord,
+  ) => Promise<StoredPdfNormalizationRecord>;
 }>;
 
 /** External adapters sit behind this port; the application worker calls no provider directly. */

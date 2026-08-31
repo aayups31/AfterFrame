@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { createDurableResearchWorkerService } from "@/application/research-worker/execute-durable-research-job";
 import { createStartResearchRunService } from "@/application/research/start-research-run";
 import { createNormalizedDocumentReceipt } from "@/application/research/create-normalized-document-receipt";
+import { createPdfDocumentReceipt } from "@/application/research/create-pdf-document-receipt";
 import type {
   DurableResearchDiscoveryHandle,
   DurableResearchDiscoveryInput,
@@ -30,6 +31,7 @@ import { SupabaseResearchRunStartStore } from "@/infrastructure/persistence/supa
 import { SupabaseResearchIdentityReader } from "@/infrastructure/persistence/supabase-research-identity-reader";
 import { SupabaseSourceRetrievalPersistence } from "@/infrastructure/persistence/supabase-source-retrieval-persistence";
 import { SupabaseSourceNormalizationPersistence } from "@/infrastructure/persistence/supabase-source-normalization-persistence";
+import { SupabasePdfNormalizationPersistence } from "@/infrastructure/persistence/supabase-pdf-normalization-persistence";
 import {
   afterFrameV1IdentityExecutionPlan,
   afterFrameV1ScopingExecutionPlan,
@@ -38,6 +40,7 @@ import {
 } from "@/infrastructure/research/afterframe-v1-research-executor-registry";
 import { DeterministicSourceMetadataResolver } from "@/infrastructure/research/deterministic-source-metadata-resolver";
 import { DeterministicHostileDocumentNormalizer } from "@/infrastructure/research/deterministic-hostile-document-normalizer";
+import { PdfJsHostileDocumentExtractor } from "@/infrastructure/research/pdfjs-hostile-document-extractor";
 import { openAIBackgroundDiscoveryExecutionIdentity } from "@/infrastructure/research/openai-background-discovery";
 import { afterFrameV1SpecialistRegistry } from "@/specialists/registry";
 
@@ -49,15 +52,22 @@ const durableResolutionLifecycleEnabled =
   process.env.AFTERFRAME_DB_MIGRATION_014_PREFLIGHT === "1" ||
   process.env.AFTERFRAME_DB_RETRIEVAL_INTEGRATION === "1" ||
   process.env.AFTERFRAME_DB_MIGRATION_015_PREFLIGHT === "1" ||
-  process.env.AFTERFRAME_DB_NORMALIZATION_INTEGRATION === "1";
+  process.env.AFTERFRAME_DB_NORMALIZATION_INTEGRATION === "1" ||
+  process.env.AFTERFRAME_DB_MIGRATION_016_PREFLIGHT === "1" ||
+  process.env.AFTERFRAME_DB_PDF_NORMALIZATION_INTEGRATION === "1";
 const durableRetrievalLifecycleEnabled =
   process.env.AFTERFRAME_DB_MIGRATION_014_PREFLIGHT === "1" ||
   process.env.AFTERFRAME_DB_RETRIEVAL_INTEGRATION === "1" ||
   process.env.AFTERFRAME_DB_MIGRATION_015_PREFLIGHT === "1" ||
-  process.env.AFTERFRAME_DB_NORMALIZATION_INTEGRATION === "1";
+  process.env.AFTERFRAME_DB_NORMALIZATION_INTEGRATION === "1" ||
+  process.env.AFTERFRAME_DB_MIGRATION_016_PREFLIGHT === "1" ||
+  process.env.AFTERFRAME_DB_PDF_NORMALIZATION_INTEGRATION === "1";
 const durableNormalizationLifecycleEnabled =
   process.env.AFTERFRAME_DB_MIGRATION_015_PREFLIGHT === "1" ||
   process.env.AFTERFRAME_DB_NORMALIZATION_INTEGRATION === "1";
+const durablePdfNormalizationLifecycleEnabled =
+  process.env.AFTERFRAME_DB_MIGRATION_016_PREFLIGHT === "1" ||
+  process.env.AFTERFRAME_DB_PDF_NORMALIZATION_INTEGRATION === "1";
 const describeDatabase = integrationEnabled ? describe : describe.skip;
 const projectRoot = fileURLToPath(new URL("../../../../", import.meta.url));
 const rollbackSentinel = Symbol("checkpoint-03-rollback");
@@ -97,6 +107,10 @@ const durableNormalizationMigration = readFileSync(
   ),
   "utf8",
 );
+const durablePdfNormalizationMigration = readFileSync(
+  fileURLToPath(new URL("../../../../supabase/migrations/016_durable_pdf_normalization_acceptance.sql", import.meta.url)),
+  "utf8",
+);
 
 const checkpoint03RpcNames = [
   "af_get_case_v1",
@@ -126,6 +140,8 @@ const allowedRpcNames = new Set<string>([
   "af_accept_source_retrieval_v1",
   "af_get_source_normalization_records_v1",
   "af_accept_source_normalization_v1",
+  "af_get_pdf_normalization_records_v1",
+  "af_accept_pdf_normalization_v1",
 ]);
 
 function loadDatabaseUrl() {
@@ -322,6 +338,29 @@ function sha256(value: string | Uint8Array) {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function deterministicPdfFixture(text: string) {
+  const escaped = text.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+  const stream = `BT /F1 12 Tf 72 720 Td (${escaped}) Tj ET`;
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+  ];
+  let output = "%PDF-1.7\n%AF\n";
+  const offsets = [0];
+  for (const [index, object] of objects.entries()) {
+    offsets[index + 1] = Buffer.byteLength(output, "binary");
+    output += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  }
+  const xref = Buffer.byteLength(output, "binary");
+  output += "xref\n0 6\n0000000000 65535 f \n";
+  for (const offset of offsets.slice(1)) output += `${offset.toString().padStart(10, "0")} 00000 n \n`;
+  output += `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return new Uint8Array(Buffer.from(output, "binary"));
+}
+
 const fingerprints: ResearchRunFingerprintPort = {
   fingerprintStartRequest: (actorId, input) =>
     sha256(`${actorId}:${JSON.stringify(input)}`),
@@ -419,8 +458,12 @@ class DeterministicPendingThenCompletedDiscoveryProvider
           {
             candidateKey: "sha256:checkpoint-04b-deterministic-candidate-two",
             title: "Second deterministic source candidate",
-            canonicalUrl: "https://example.org/afterframe-source-two",
-            medium: "WEBPAGE" as const,
+            canonicalUrl: durablePdfNormalizationLifecycleEnabled
+              ? "https://example.org/afterframe-source-two.pdf"
+              : "https://example.org/afterframe-source-two",
+            medium: durablePdfNormalizationLifecycleEnabled
+              ? "PDF" as const
+              : "WEBPAGE" as const,
             sourceClass,
             axisIds: [axis.axisId],
             accessState: "UNKNOWN" as const,
@@ -604,6 +647,9 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
           }
           if (process.env.AFTERFRAME_DB_MIGRATION_015_PREFLIGHT === "1") {
             await client.query(durableNormalizationMigration);
+          }
+          if (process.env.AFTERFRAME_DB_MIGRATION_016_PREFLIGHT === "1") {
+            await client.query(durablePdfNormalizationMigration);
           }
           await seedCase(client, investigationCase, rootBranch);
           const invokeRpc = transactionalRpcInvoker(client, (failure) => {
@@ -967,6 +1013,9 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
           }
           if (process.env.AFTERFRAME_DB_MIGRATION_015_PREFLIGHT === "1") {
             await client.query(durableNormalizationMigration);
+          }
+          if (process.env.AFTERFRAME_DB_MIGRATION_016_PREFLIGHT === "1") {
+            await client.query(durablePdfNormalizationMigration);
           }
           await seedCase(client, investigationCase, rootBranch);
           const invokeRpc = transactionalRpcInvoker(client, (failure) => {
@@ -1493,7 +1542,9 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
                 sourceContext: typeof firstSource,
                 createdAt: string,
                 body: Uint8Array,
-              ) => ({
+              ) => {
+                const pdf = sourceContext.source.medium === "PDF";
+                return ({
                 schemaVersion: 1 as const,
                 id: randomUUID(),
                 runId: retrievalContext.runId,
@@ -1526,8 +1577,8 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
                     redirectChainFingerprint: sha256(
                       JSON.stringify([sourceContext.source.canonicalUrl]),
                     ),
-                    declaredMediaType: "text/html; charset=utf-8",
-                    verifiedMediaType: "text/html",
+                    declaredMediaType: pdf ? "application/pdf" : "text/html; charset=utf-8",
+                    verifiedMediaType: pdf ? "application/pdf" : "text/html",
                     wireContentLength: body.byteLength,
                     decodedContentLength: body.byteLength,
                     contentFingerprint: sha256(body),
@@ -1547,13 +1598,18 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
                   },
                 },
                 createdAt,
-              });
+                });
+              };
 
               const sourceBody = (sourceContext: typeof firstSource) =>
-                new TextEncoder().encode(
-                  `<html><head><title>${sourceContext.candidate.title}</title></head>` +
-                    `<body><h1>Production record</h1><p>Inspectable source material for ${sourceContext.candidate.id}.</p></body></html>`,
-                );
+                sourceContext.source.medium === "PDF"
+                  ? deterministicPdfFixture(
+                      `Inspectable PDF material for ${sourceContext.candidate.id}.`,
+                    )
+                  : new TextEncoder().encode(
+                      `<html><head><title>${sourceContext.candidate.title}</title></head>` +
+                        `<body><h1>Production record</h1><p>Inspectable source material for ${sourceContext.candidate.id}.</p></body></html>`,
+                    );
 
               const firstBody = sourceBody(firstSource);
               const firstRecord = makeRecord(
@@ -1805,6 +1861,116 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
                   content_records: "2",
                   retained_documents: "0",
                   passed_documents: "2",
+                });
+              }
+              if (durablePdfNormalizationLifecycleEnabled) {
+                if (secondAccepted.status !== "COMMITTED") {
+                  throw new Error("PDF retrieval was not committed");
+                }
+                const pdfSource = firstSource.source.medium === "PDF" ? firstSource : secondSource;
+                const pdfAccepted = firstSource.source.medium === "PDF"
+                  ? firstAccepted.record
+                  : secondAccepted.record;
+                const pdfBody = firstSource.source.medium === "PDF" ? firstBody : secondBody;
+                if (pdfSource.source.medium !== "PDF" || pdfAccepted.result.status !== "RETRIEVED") {
+                  throw new Error("PDF normalization requires a retrieved receipt");
+                }
+                const pdfDocument = await new PdfJsHostileDocumentExtractor().extract({
+                  snapshotId: pdfAccepted.result.receipt.snapshotId,
+                  sourceId: pdfAccepted.result.receipt.sourceId,
+                  sourceLocatorId: pdfAccepted.result.receipt.sourceLocatorId,
+                  contentFingerprint: pdfAccepted.result.receipt.contentFingerprint,
+                  verifiedMediaType: pdfAccepted.result.receipt.verifiedMediaType,
+                  body: pdfBody,
+                  normalizedAt: await databaseTimestamp(client),
+                });
+                const pdfReceipt = createPdfDocumentReceipt({
+                  id: randomUUID(),
+                  runId: retrievalContext.runId,
+                  candidateId: pdfSource.candidate.id,
+                  retrievalRecordId: pdfAccepted.id,
+                  document: pdfDocument,
+                  accessState: "OPEN",
+                  rightsState: "LINK_ONLY",
+                  retention: "TRANSIENT_ONLY",
+                  storageRef: null,
+                });
+                const pdfRecord = {
+                  schemaVersion: 1 as const,
+                  id: randomUUID(),
+                  runId: retrievalContext.runId,
+                  jobId: retrievalContext.jobId,
+                  attemptId: retrievalContext.attemptId,
+                  caseId: retrievalContext.caseId,
+                  manifestFingerprint: retrievalContext.manifestFingerprint,
+                  retrievalRecordId: pdfAccepted.id,
+                  idempotencyKey: `checkpoint-04d:pdf-normalize:${pdfSource.candidate.id}`,
+                  normalizer: pdfReceipt.normalizer,
+                  result: { status: "NORMALIZED" as const, receipt: pdfReceipt },
+                  createdAt: await databaseTimestamp(client),
+                };
+                const stalePdf = await workerStore.acceptPdfNormalization?.({
+                  actorId,
+                  lease: normalizationClaim.claim.lease,
+                  record: pdfRecord,
+                  leaseDurationSeconds: 60,
+                });
+                expect(stalePdf).toEqual({ status: "LEASE_LOST" });
+                const acceptedPdf = await workerStore.acceptPdfNormalization?.({
+                  actorId,
+                  lease: secondAccepted.lease,
+                  record: pdfRecord,
+                  leaseDurationSeconds: 60,
+                });
+                expect(acceptedPdf?.status).toBe("COMMITTED");
+                if (acceptedPdf?.status !== "COMMITTED") {
+                  throw new Error("PDF normalization was not committed");
+                }
+                const replayedPdf = await workerStore.acceptPdfNormalization?.({
+                  actorId,
+                  lease: acceptedPdf.lease,
+                  record: pdfRecord,
+                  leaseDurationSeconds: 60,
+                });
+                expect(replayedPdf?.status).toBe("REPLAY");
+
+                const pdfPersistence = new SupabasePdfNormalizationPersistence({ actorId, invokeRpc });
+                const acceptedPdfs = await pdfPersistence.listAcceptedPdfNormalizations({
+                  actorId,
+                  runId: retrievalContext.runId,
+                  jobId: retrievalContext.jobId,
+                  attemptId: retrievalContext.attemptId,
+                });
+                expect(acceptedPdfs).toHaveLength(1);
+                expect(acceptedPdfs[0]).toMatchObject({
+                  result: {
+                    status: "NORMALIZED",
+                    receipt: {
+                      documentKind: "PDF",
+                      retention: "TRANSIENT_ONLY",
+                      storageRef: null,
+                      screeningState: "PASSED",
+                    },
+                  },
+                });
+                expect(JSON.stringify(acceptedPdfs)).not.toContain(
+                  `Inspectable PDF material for ${pdfSource.candidate.id}.`,
+                );
+                const pdfCounts = await client.query<{
+                  normalizations: string; content_records: string; retained_documents: string;
+                }>(
+                  `select
+                     (select count(*)::text from public.af_pdf_normalization_records where run_id = $1) as normalizations,
+                     (select count(*)::text from public.af_untrusted_research_content
+                       where run_id = $1 and content_kind = 'DOCUMENT') as content_records,
+                     (select count(*)::text from public.af_pdf_normalization_records
+                       where run_id = $1 and storage_ref is not null) as retained_documents`,
+                  [retrievalContext.runId],
+                );
+                expect(pdfCounts.rows[0]).toEqual({
+                  normalizations: "1",
+                  content_records: "1",
+                  retained_documents: "0",
                 });
               }
             }
