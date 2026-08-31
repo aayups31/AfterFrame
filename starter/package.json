@@ -25,8 +25,10 @@
     "test:migration:014:predeploy": "AFTERFRAME_DB_INTEGRATION=1 AFTERFRAME_DB_MIGRATION_014_PREFLIGHT=1 vitest run src/infrastructure/persistence/__tests__/checkpoint-04d-retrieval-migration-predeploy.integration.test.ts src/infrastructure/persistence/__tests__/checkpoint-03-postgres.integration.test.ts",
     "test:migration:015:predeploy": "AFTERFRAME_DB_INTEGRATION=1 AFTERFRAME_DB_MIGRATION_015_PREFLIGHT=1 vitest run src/infrastructure/persistence/__tests__/checkpoint-04d-normalization-migration-predeploy.integration.test.ts src/infrastructure/persistence/__tests__/checkpoint-03-postgres.integration.test.ts",
     "db:migrate:014": "node scripts/deploy-migration-014.mjs",
+    "db:migrate:015": "node scripts/deploy-migration-015.mjs",
     "test:integration:resolution": "AFTERFRAME_DB_INTEGRATION=1 AFTERFRAME_DB_RESOLUTION_INTEGRATION=1 vitest run src/infrastructure/persistence/__tests__/checkpoint-03-postgres.integration.test.ts",
     "test:integration:retrieval": "AFTERFRAME_DB_INTEGRATION=1 AFTERFRAME_DB_RETRIEVAL_INTEGRATION=1 vitest run src/infrastructure/persistence/__tests__/checkpoint-03-postgres.integration.test.ts",
+    "test:integration:normalization": "AFTERFRAME_DB_INTEGRATION=1 AFTERFRAME_DB_NORMALIZATION_INTEGRATION=1 vitest run src/infrastructure/persistence/__tests__/checkpoint-03-postgres.integration.test.ts",
     "check": "npm run typecheck && npm run lint && npm run test && npm run build"
   },
   "dependencies": {

@@ -48,13 +48,16 @@ const durableResolutionLifecycleEnabled =
   process.env.AFTERFRAME_DB_RESOLUTION_INTEGRATION === "1" ||
   process.env.AFTERFRAME_DB_MIGRATION_014_PREFLIGHT === "1" ||
   process.env.AFTERFRAME_DB_RETRIEVAL_INTEGRATION === "1" ||
-  process.env.AFTERFRAME_DB_MIGRATION_015_PREFLIGHT === "1";
+  process.env.AFTERFRAME_DB_MIGRATION_015_PREFLIGHT === "1" ||
+  process.env.AFTERFRAME_DB_NORMALIZATION_INTEGRATION === "1";
 const durableRetrievalLifecycleEnabled =
   process.env.AFTERFRAME_DB_MIGRATION_014_PREFLIGHT === "1" ||
   process.env.AFTERFRAME_DB_RETRIEVAL_INTEGRATION === "1" ||
-  process.env.AFTERFRAME_DB_MIGRATION_015_PREFLIGHT === "1";
+  process.env.AFTERFRAME_DB_MIGRATION_015_PREFLIGHT === "1" ||
+  process.env.AFTERFRAME_DB_NORMALIZATION_INTEGRATION === "1";
 const durableNormalizationLifecycleEnabled =
-  process.env.AFTERFRAME_DB_MIGRATION_015_PREFLIGHT === "1";
+  process.env.AFTERFRAME_DB_MIGRATION_015_PREFLIGHT === "1" ||
+  process.env.AFTERFRAME_DB_NORMALIZATION_INTEGRATION === "1";
 const describeDatabase = integrationEnabled ? describe : describe.skip;
 const projectRoot = fileURLToPath(new URL("../../../../", import.meta.url));
 const rollbackSentinel = Symbol("checkpoint-03-rollback");
