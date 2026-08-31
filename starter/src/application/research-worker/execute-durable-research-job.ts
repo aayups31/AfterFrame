@@ -59,6 +59,12 @@ import {
   type DurableSourceRetrievalRecord,
   type StoredSourceRetrievalRecord,
 } from "@/core/research/source-retrieval";
+import {
+  DurableSourceNormalizationRecordSchema,
+  SourceNormalizationAcceptanceResultSchema,
+  type DurableSourceNormalizationRecord,
+  type StoredSourceNormalizationRecord,
+} from "@/core/research/source-normalization";
 
 export type ResearchWorkerIdentifierKind =
   | "research_attempt"
@@ -1093,6 +1099,73 @@ export function createDurableResearchWorkerService(
       });
     };
 
+    const acceptSourceNormalization = async (
+      recordInput: DurableSourceNormalizationRecord,
+    ): Promise<StoredSourceNormalizationRecord> => {
+      const record = DurableSourceNormalizationRecordSchema.parse(recordInput);
+      if (
+        claim.job.stage !== "NORMALIZATION" ||
+        record.runId !== claim.run.id ||
+        record.jobId !== claim.job.id ||
+        record.attemptId !== claim.attempt.id ||
+        record.caseId !== claim.run.caseId ||
+        record.manifestFingerprint !== claim.inputManifest.manifestFingerprint
+      ) {
+        throw new DurableResearchWorkerError(
+          "CLAIM_REJECTED",
+          "Source normalization does not match the active normalization attempt",
+        );
+      }
+      const persistNormalization = dependencies.store.acceptSourceNormalization;
+      return serialize(async () => {
+        if (authority !== "ACTIVE" || !acceptingCheckpoints) {
+          throw new LeaseAuthorityError(
+            authority === "ACTIVE" ? "LEASE_LOST" : authority,
+          );
+        }
+        let acceptanceResult;
+        try {
+          acceptanceResult = boundaryParse(
+            SourceNormalizationAcceptanceResultSchema,
+            await persistNormalization.call(dependencies.store, {
+              actorId,
+              lease,
+              record,
+              leaseDurationSeconds: configuration.leaseDurationSeconds,
+            }),
+            "CLAIM_INVALID",
+            "The research store returned an invalid source-normalization acceptance",
+          );
+        } catch (error) {
+          revoke("LEASE_LOST");
+          if (error instanceof LeaseAuthorityError) throw error;
+          throw new LeaseAuthorityError("LEASE_LOST");
+        }
+        if (
+          acceptanceResult.status === "COMMITTED" ||
+          acceptanceResult.status === "REPLAY"
+        ) {
+          const acceptedRecord = Object.fromEntries(
+            Object.entries(acceptanceResult.record).filter(
+              ([key]) =>
+                key !== "normalizationFingerprint" && key !== "acceptedAt",
+            ),
+          );
+          if (
+            !leaseContinues(lease, acceptanceResult.lease) ||
+            JSON.stringify(acceptedRecord) !== JSON.stringify(record)
+          ) {
+            revoke("LEASE_LOST");
+            throw new LeaseAuthorityError("LEASE_LOST");
+          }
+          lease = acceptanceResult.lease;
+          return acceptanceResult.record;
+        }
+        revoke(acceptanceResult.status);
+        throw new LeaseAuthorityError(acceptanceResult.status);
+      });
+    };
+
     const maintenance = (async () => {
       while (authority === "ACTIVE") {
         try {
@@ -1136,6 +1209,7 @@ export function createDurableResearchWorkerService(
           acceptProviderRun,
           acceptSourceResolution,
           acceptSourceRetrieval,
+          acceptSourceNormalization,
         }),
       )
       .then(

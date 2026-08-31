@@ -40,6 +40,11 @@ import type {
   SourceRetrievalAcceptanceResult,
   StoredSourceRetrievalRecord,
 } from "@/core/research/source-retrieval";
+import type {
+  DurableSourceNormalizationRecord,
+  SourceNormalizationAcceptanceResult,
+  StoredSourceNormalizationRecord,
+} from "@/core/research/source-normalization";
 
 export const START_RESEARCH_RUN_COMMAND = "start_research_run" as const;
 
@@ -198,6 +203,13 @@ export type AcceptSourceRetrievalInput = Readonly<{
   leaseDurationSeconds: number;
 }>;
 
+export type AcceptSourceNormalizationInput = Readonly<{
+  actorId: string;
+  lease: ResearchJobLeaseCursor;
+  record: DurableSourceNormalizationRecord;
+  leaseDurationSeconds: number;
+}>;
+
 export type CompleteDurableResearchJobInput = Readonly<{
   actorId: string;
   lease: ResearchJobLeaseCursor;
@@ -243,6 +255,9 @@ export interface DurableResearchWorkerStore {
   acceptSourceRetrieval(
     input: AcceptSourceRetrievalInput,
   ): Promise<SourceRetrievalAcceptanceResult>;
+  acceptSourceNormalization(
+    input: AcceptSourceNormalizationInput,
+  ): Promise<SourceNormalizationAcceptanceResult>;
   completeResearchJob(
     input: CompleteDurableResearchJobInput,
   ): Promise<ResearchJobCompletionResult>;
@@ -275,6 +290,10 @@ export type DurableResearchStageExecutionInput = Readonly<{
   acceptSourceRetrieval?: (
     record: DurableSourceRetrievalRecord,
   ) => Promise<StoredSourceRetrievalRecord>;
+  /** Serialized text-free normalization receipt acceptance for NORMALIZATION only. */
+  acceptSourceNormalization?: (
+    record: DurableSourceNormalizationRecord,
+  ) => Promise<StoredSourceNormalizationRecord>;
 }>;
 
 /** External adapters sit behind this port; the application worker calls no provider directly. */

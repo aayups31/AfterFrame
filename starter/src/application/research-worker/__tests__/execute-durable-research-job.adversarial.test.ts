@@ -7,6 +7,7 @@ import type {
   AcceptResearchProviderRunInput,
   AcceptSourceResolutionInput,
   AcceptSourceRetrievalInput,
+  AcceptSourceNormalizationInput,
   CheckpointResearchJobInput,
   ClaimResearchJobInput,
   CompleteDurableResearchJobInput,
@@ -348,6 +349,23 @@ class Store implements DurableResearchWorkerStore {
       record: {
         ...input.record,
         retrievalFingerprint: "8".repeat(64),
+        acceptedAt: T2,
+      },
+      lease: {
+        ...input.lease,
+        heartbeatAt: T2,
+        expiresAt: T4,
+      },
+    };
+  }
+
+  async acceptSourceNormalization(input: AcceptSourceNormalizationInput) {
+    this.calls.push("accept-normalization");
+    return {
+      status: "COMMITTED" as const,
+      record: {
+        ...input.record,
+        normalizationFingerprint: "7".repeat(64),
         acceptedAt: T2,
       },
       lease: {

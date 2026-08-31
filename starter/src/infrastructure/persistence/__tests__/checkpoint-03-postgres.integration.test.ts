@@ -5,6 +5,7 @@ import { Client } from "pg";
 import { describe, expect, it } from "vitest";
 import { createDurableResearchWorkerService } from "@/application/research-worker/execute-durable-research-job";
 import { createStartResearchRunService } from "@/application/research/start-research-run";
+import { createNormalizedDocumentReceipt } from "@/application/research/create-normalized-document-receipt";
 import type {
   DurableResearchDiscoveryHandle,
   DurableResearchDiscoveryInput,
@@ -28,6 +29,7 @@ import {
 import { SupabaseResearchRunStartStore } from "@/infrastructure/persistence/supabase-research-run-start-store";
 import { SupabaseResearchIdentityReader } from "@/infrastructure/persistence/supabase-research-identity-reader";
 import { SupabaseSourceRetrievalPersistence } from "@/infrastructure/persistence/supabase-source-retrieval-persistence";
+import { SupabaseSourceNormalizationPersistence } from "@/infrastructure/persistence/supabase-source-normalization-persistence";
 import {
   afterFrameV1IdentityExecutionPlan,
   afterFrameV1ScopingExecutionPlan,
@@ -35,6 +37,7 @@ import {
   createAfterFrameV1ResearchExecutorRegistry,
 } from "@/infrastructure/research/afterframe-v1-research-executor-registry";
 import { DeterministicSourceMetadataResolver } from "@/infrastructure/research/deterministic-source-metadata-resolver";
+import { DeterministicHostileDocumentNormalizer } from "@/infrastructure/research/deterministic-hostile-document-normalizer";
 import { openAIBackgroundDiscoveryExecutionIdentity } from "@/infrastructure/research/openai-background-discovery";
 import { afterFrameV1SpecialistRegistry } from "@/specialists/registry";
 
@@ -44,10 +47,14 @@ const durableResolutionLifecycleEnabled =
   process.env.AFTERFRAME_DB_MIGRATION_013_PREFLIGHT === "1" ||
   process.env.AFTERFRAME_DB_RESOLUTION_INTEGRATION === "1" ||
   process.env.AFTERFRAME_DB_MIGRATION_014_PREFLIGHT === "1" ||
-  process.env.AFTERFRAME_DB_RETRIEVAL_INTEGRATION === "1";
+  process.env.AFTERFRAME_DB_RETRIEVAL_INTEGRATION === "1" ||
+  process.env.AFTERFRAME_DB_MIGRATION_015_PREFLIGHT === "1";
 const durableRetrievalLifecycleEnabled =
   process.env.AFTERFRAME_DB_MIGRATION_014_PREFLIGHT === "1" ||
-  process.env.AFTERFRAME_DB_RETRIEVAL_INTEGRATION === "1";
+  process.env.AFTERFRAME_DB_RETRIEVAL_INTEGRATION === "1" ||
+  process.env.AFTERFRAME_DB_MIGRATION_015_PREFLIGHT === "1";
+const durableNormalizationLifecycleEnabled =
+  process.env.AFTERFRAME_DB_MIGRATION_015_PREFLIGHT === "1";
 const describeDatabase = integrationEnabled ? describe : describe.skip;
 const projectRoot = fileURLToPath(new URL("../../../../", import.meta.url));
 const rollbackSentinel = Symbol("checkpoint-03-rollback");
@@ -73,6 +80,15 @@ const durableRetrievalMigration = readFileSync(
   fileURLToPath(
     new URL(
       "../../../../supabase/migrations/014_durable_source_retrieval_acceptance.sql",
+      import.meta.url,
+    ),
+  ),
+  "utf8",
+);
+const durableNormalizationMigration = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../supabase/migrations/015_durable_source_normalization_acceptance.sql",
       import.meta.url,
     ),
   ),
@@ -105,6 +121,8 @@ const allowedRpcNames = new Set<string>([
   "af_get_normalization_retrieval_context_v1",
   "af_get_source_retrieval_records_v1",
   "af_accept_source_retrieval_v1",
+  "af_get_source_normalization_records_v1",
+  "af_accept_source_normalization_v1",
 ]);
 
 function loadDatabaseUrl() {
@@ -297,7 +315,7 @@ async function databaseTimestamp(client: Client, offsetMilliseconds = 25) {
   return new Date(timestamp.getTime() + offsetMilliseconds).toISOString();
 }
 
-function sha256(value: string) {
+function sha256(value: string | Uint8Array) {
   return createHash("sha256").update(value).digest("hex");
 }
 
@@ -580,6 +598,9 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
           }
           if (process.env.AFTERFRAME_DB_MIGRATION_014_PREFLIGHT === "1") {
             await client.query(durableRetrievalMigration);
+          }
+          if (process.env.AFTERFRAME_DB_MIGRATION_015_PREFLIGHT === "1") {
+            await client.query(durableNormalizationMigration);
           }
           await seedCase(client, investigationCase, rootBranch);
           const invokeRpc = transactionalRpcInvoker(client, (failure) => {
@@ -940,6 +961,9 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
           }
           if (process.env.AFTERFRAME_DB_MIGRATION_014_PREFLIGHT === "1") {
             await client.query(durableRetrievalMigration);
+          }
+          if (process.env.AFTERFRAME_DB_MIGRATION_015_PREFLIGHT === "1") {
+            await client.query(durableNormalizationMigration);
           }
           await seedCase(client, investigationCase, rootBranch);
           const invokeRpc = transactionalRpcInvoker(client, (failure) => {
@@ -1465,6 +1489,7 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
               const makeRecord = (
                 sourceContext: typeof firstSource,
                 createdAt: string,
+                body: Uint8Array,
               ) => ({
                 schemaVersion: 1 as const,
                 id: randomUUID(),
@@ -1500,11 +1525,9 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
                     ),
                     declaredMediaType: "text/html; charset=utf-8",
                     verifiedMediaType: "text/html",
-                    wireContentLength: 128,
-                    decodedContentLength: 128,
-                    contentFingerprint: sha256(
-                      `checkpoint-04d-hostile-bytes:${sourceContext.candidate.id}`,
-                    ),
+                    wireContentLength: body.byteLength,
+                    decodedContentLength: body.byteLength,
+                    contentFingerprint: sha256(body),
                     retention: "TRANSIENT_ONLY" as const,
                     storageRef: null,
                     accessState: "OPEN" as const,
@@ -1523,9 +1546,17 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
                 createdAt,
               });
 
+              const sourceBody = (sourceContext: typeof firstSource) =>
+                new TextEncoder().encode(
+                  `<html><head><title>${sourceContext.candidate.title}</title></head>` +
+                    `<body><h1>Production record</h1><p>Inspectable source material for ${sourceContext.candidate.id}.</p></body></html>`,
+                );
+
+              const firstBody = sourceBody(firstSource);
               const firstRecord = makeRecord(
                 firstSource,
                 await databaseTimestamp(client),
+                firstBody,
               );
               const firstAccepted = await workerStore.acceptSourceRetrieval({
                 actorId,
@@ -1551,9 +1582,11 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
                 throw new Error("First retrieval did not replay exactly");
               }
 
+              const secondBody = sourceBody(secondSource);
               const secondRecord = makeRecord(
                 secondSource,
                 await databaseTimestamp(client),
+                secondBody,
               );
               const staleAcceptance = await workerStore.acceptSourceRetrieval({
                 actorId,
@@ -1611,6 +1644,166 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
                 snapshots: "2",
                 retained_bodies: "0",
               });
+
+              if (durableNormalizationLifecycleEnabled) {
+                if (secondAccepted.status !== "COMMITTED") {
+                  throw new Error("Second retrieval was not committed");
+                }
+                const normalizer = new DeterministicHostileDocumentNormalizer();
+                const makeNormalizationRecord = (
+                  sourceContext: typeof firstSource,
+                  retrievalRecord: typeof firstAccepted.record,
+                  body: Uint8Array,
+                  leaseCreatedAt: string,
+                ) => {
+                  if (retrievalRecord.result.status !== "RETRIEVED") {
+                    throw new Error("Normalization requires a retrieved receipt");
+                  }
+                  const document = normalizer.normalize({
+                    snapshotId: retrievalRecord.result.receipt.snapshotId,
+                    sourceId: retrievalRecord.result.receipt.sourceId,
+                    sourceLocatorId:
+                      retrievalRecord.result.receipt.sourceLocatorId,
+                    contentFingerprint:
+                      retrievalRecord.result.receipt.contentFingerprint,
+                    verifiedMediaType:
+                      retrievalRecord.result.receipt.verifiedMediaType,
+                    body,
+                    normalizedAt: leaseCreatedAt,
+                  });
+                  const receipt = createNormalizedDocumentReceipt({
+                    id: randomUUID(),
+                    runId: retrievalContext.runId,
+                    candidateId: sourceContext.candidate.id,
+                    retrievalRecordId: retrievalRecord.id,
+                    document,
+                    accessState: "OPEN",
+                    rightsState: "LINK_ONLY",
+                    retention: "TRANSIENT_ONLY",
+                    storageRef: null,
+                  });
+                  return {
+                    schemaVersion: 1 as const,
+                    id: randomUUID(),
+                    runId: retrievalContext.runId,
+                    jobId: retrievalContext.jobId,
+                    attemptId: retrievalContext.attemptId,
+                    caseId: retrievalContext.caseId,
+                    manifestFingerprint: retrievalContext.manifestFingerprint,
+                    retrievalRecordId: retrievalRecord.id,
+                    idempotencyKey: `checkpoint-04d:normalize:${sourceContext.candidate.id}`,
+                    normalizer: document.normalizer,
+                    result: { status: "NORMALIZED" as const, receipt },
+                    createdAt: leaseCreatedAt,
+                  };
+                };
+
+                const firstNormalization = makeNormalizationRecord(
+                  firstSource,
+                  firstAccepted.record,
+                  firstBody,
+                  await databaseTimestamp(client),
+                );
+                const firstNormalizationAccepted =
+                  await workerStore.acceptSourceNormalization({
+                    actorId,
+                    lease: secondAccepted.lease,
+                    record: firstNormalization,
+                    leaseDurationSeconds: 60,
+                  });
+                expect(firstNormalizationAccepted.status).toBe("COMMITTED");
+                if (firstNormalizationAccepted.status !== "COMMITTED") {
+                  throw new Error("First normalization was not committed");
+                }
+                const firstNormalizationReplay =
+                  await workerStore.acceptSourceNormalization({
+                    actorId,
+                    lease: firstNormalizationAccepted.lease,
+                    record: firstNormalization,
+                    leaseDurationSeconds: 60,
+                  });
+                expect(firstNormalizationReplay.status).toBe("REPLAY");
+                if (firstNormalizationReplay.status !== "REPLAY") {
+                  throw new Error("First normalization did not replay exactly");
+                }
+
+                const secondNormalization = makeNormalizationRecord(
+                  secondSource,
+                  secondAccepted.record,
+                  secondBody,
+                  await databaseTimestamp(client),
+                );
+                const staleNormalization =
+                  await workerStore.acceptSourceNormalization({
+                    actorId,
+                    lease: secondAccepted.lease,
+                    record: secondNormalization,
+                    leaseDurationSeconds: 60,
+                  });
+                expect(staleNormalization).toEqual({ status: "LEASE_LOST" });
+                const secondNormalizationAccepted =
+                  await workerStore.acceptSourceNormalization({
+                    actorId,
+                    lease: firstNormalizationReplay.lease,
+                    record: secondNormalization,
+                    leaseDurationSeconds: 60,
+                  });
+                expect(secondNormalizationAccepted.status).toBe("COMMITTED");
+
+                const normalizationPersistence =
+                  new SupabaseSourceNormalizationPersistence({
+                    actorId,
+                    invokeRpc,
+                  });
+                const acceptedNormalizations =
+                  await normalizationPersistence.listAcceptedNormalizations({
+                    actorId,
+                    runId: retrievalContext.runId,
+                    jobId: retrievalContext.jobId,
+                    attemptId: retrievalContext.attemptId,
+                  });
+                expect(acceptedNormalizations).toHaveLength(2);
+                expect(
+                  acceptedNormalizations.every(
+                    (record) =>
+                      record.result.status === "NORMALIZED" &&
+                      record.result.receipt.retention === "TRANSIENT_ONLY" &&
+                      record.result.receipt.storageRef === null &&
+                      record.result.receipt.screeningState === "PASSED",
+                  ),
+                ).toBe(true);
+
+                const normalizationCounts = await client.query<{
+                  normalizations: string;
+                  content_records: string;
+                  retained_documents: string;
+                  passed_documents: string;
+                }>(
+                  `select
+                     (select count(*)::text
+                        from public.af_source_normalization_records
+                        where run_id = $1) as normalizations,
+                     (select count(*)::text
+                        from public.af_untrusted_research_content
+                        where run_id = $1 and content_kind = 'DOCUMENT')
+                       as content_records,
+                     (select count(*)::text
+                        from public.af_source_normalization_records
+                        where run_id = $1 and storage_ref is not null)
+                       as retained_documents,
+                     (select count(*)::text
+                        from public.af_source_normalization_records
+                        where run_id = $1 and screening_state = 'PASSED')
+                       as passed_documents`,
+                  [retrievalContext.runId],
+                );
+                expect(normalizationCounts.rows[0]).toEqual({
+                  normalizations: "2",
+                  content_records: "2",
+                  retained_documents: "0",
+                  passed_documents: "2",
+                });
+              }
             }
           }
 
