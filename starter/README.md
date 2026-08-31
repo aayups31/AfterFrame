@@ -31,6 +31,11 @@ The evidence links and locators in `src/lib/mock-case.ts` are clearly marked moc
 
 The production research boundary does not return a generated answer. It stages identity, scoping, discovery, resolution, normalization, corroboration, and sequencing as separate jobs. OpenAI search output can create untrusted source candidates only; deterministic resolvers and later human/agent review must establish locators and evidence before anything can enter the investigation.
 
+The RESOLUTION network adapter is server-only and disabled by default. When
+explicitly enabled in a controlled worker, it performs DNS-validated,
+IP-pinned, redirect-safe, body-free metadata probes. It cannot retrieve source
+content or promote a candidate to evidence.
+
 ## Build with Codex
 
 From this directory:

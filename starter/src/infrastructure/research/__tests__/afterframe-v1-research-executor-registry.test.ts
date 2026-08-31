@@ -124,6 +124,48 @@ describe("AfterFrame V1 durable executor composition", () => {
     expect(invokeRpc).not.toHaveBeenCalled();
   });
 
+  it("can compose the hardened public metadata probe only through an explicit kill switch", () => {
+    const invokeRpc = vi.fn(async () => ({ data: null, error: null }));
+    const registry = createAfterFrameV1ResearchExecutorRegistry({
+      actorId: ACTOR_ID,
+      invokeRpc,
+      tmdbApiKey: "private-tmdb-key",
+      fetchImpl: vi.fn(),
+      resolution: {
+        publicMetadataProbe: { enabled: false },
+      },
+    });
+
+    expect(registry.resolve("RESOLUTION")?.identity).toEqual({
+      stage: "RESOLUTION",
+      execution: afterFrameV1SourceResolutionExecutionPlan(),
+    });
+    expect(invokeRpc).not.toHaveBeenCalled();
+  });
+
+  it("retains hardened RESOLUTION when attested shadow DISCOVERY is composed", () => {
+    const registry = createAfterFrameV1ShadowResearchExecutorRegistry({
+      actorId: ACTOR_ID,
+      invokeRpc: vi.fn(async () => ({ data: null, error: null })),
+      tmdbApiKey: "private-tmdb-key",
+      openAiApiKey: "private-openai-key",
+      requestedModel: "gpt-5.6-sol",
+      expectedProviderSnapshot: "gpt-5.6-sol",
+      dataControlAttestation: {
+        mode: "MODIFIED_ABUSE_MONITORING",
+        projectIdFingerprint: "a".repeat(64),
+        attestedAt: "2026-08-22T18:00:00.000Z",
+        attestedBy: "deployment-owner",
+      },
+      resolution: {
+        publicMetadataProbe: { enabled: false },
+      },
+    });
+
+    expect(registry.resolve("DISCOVERY")).not.toBeNull();
+    expect(registry.resolve("RESOLUTION")).not.toBeNull();
+  });
+
   it("rejects shadow composition without a valid MAM attestation", () => {
     expect(() =>
       createAfterFrameV1ShadowResearchExecutorRegistry({

@@ -40,4 +40,28 @@ describe("source resolution public-network policy", () => {
       assertPublicResolutionAddresses(["93.184.216.34", "169.254.169.254"]),
     ).toThrow(SourceResolutionNetworkPolicyError);
   });
+
+  it.each([
+    "0.0.0.0",
+    "100.100.100.100",
+    "169.254.169.254",
+    "192.0.2.1",
+    "198.18.0.1",
+    "203.0.113.1",
+    "::",
+    "::1",
+    "::ffff:127.0.0.1",
+    "64:ff9b::7f00:1",
+    "2001:db8::1",
+    "fc00::1",
+    "fe80::1",
+  ])("rejects special-use address space: %s", (address) => {
+    expect(addressIsPublic(address)).toBe(false);
+  });
+
+  it("admits representative globally routable IPv4 and IPv6 addresses", () => {
+    expect(addressIsPublic("1.1.1.1")).toBe(true);
+    expect(addressIsPublic("2606:4700:4700::1111")).toBe(true);
+    expect(addressIsPublic("2001:4860:4860::8888")).toBe(true);
+  });
 });

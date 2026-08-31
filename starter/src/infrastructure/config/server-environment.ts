@@ -76,6 +76,10 @@ export const AfterFrameServerEnvironmentSchema = z
       .enum(["fixture", "shadow"])
       .default("fixture"),
     OPENAI_RESEARCH_MODEL: z.string().trim().min(1).default("gpt-5.6-sol"),
+    AFTERFRAME_SOURCE_METADATA_PROBE_ENABLED: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
   })
   .strict()
   .superRefine((environment, context) => {
@@ -112,6 +116,7 @@ const SERVER_ENV_KEYS = [
   "SUPABASE_DB_URL",
   "AFTERFRAME_RESEARCH_MODE",
   "OPENAI_RESEARCH_MODEL",
+  "AFTERFRAME_SOURCE_METADATA_PROBE_ENABLED",
 ] as const;
 
 /** Reads only the server configuration AfterFrame owns; unrelated process env is ignored. */
@@ -140,5 +145,7 @@ export function serverEnvironmentReadiness(
       environment.NEXT_PUBLIC_SUPABASE_ANON_KEY.length > 0 &&
       environment.SUPABASE_SERVICE_ROLE_KEY.length > 0,
     databaseConfigured: environment.SUPABASE_DB_URL.length > 0,
+    sourceMetadataProbeEnabled:
+      environment.AFTERFRAME_SOURCE_METADATA_PROBE_ENABLED,
   } as const;
 }

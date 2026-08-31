@@ -4,6 +4,7 @@ import type {
   SourceResolutionInput,
 } from "@/application/research/source-resolution-port";
 import { DeterministicSourceMetadataResolver } from "@/infrastructure/research/deterministic-source-metadata-resolver";
+import { createNodePublicSourceMetadataResolver } from "@/infrastructure/research/node-public-source-metadata-probe";
 
 const ZERO_HASH = "0".repeat(64);
 
@@ -147,6 +148,18 @@ describe("deterministic source metadata resolver", () => {
       publicationAuthority: "NONE",
     });
     expect(transport.probe).not.toHaveBeenCalled();
+  });
+
+  it("degrades deterministically without network work when production probing is disabled", async () => {
+    const resolver = createNodePublicSourceMetadataResolver({ enabled: false });
+
+    await expect(
+      resolver.resolve(resolutionInput(), new AbortController().signal),
+    ).resolves.toMatchObject({
+      status: "UNRESOLVED",
+      code: "probe-unavailable",
+      publicationAuthority: "NONE",
+    });
   });
 
   it("rejects a transport contract that contains source body data", async () => {

@@ -20,6 +20,7 @@ describe("server environment", () => {
 
     expect(parsed.AFTERFRAME_RESEARCH_MODE).toBe("fixture");
     expect(parsed.OPENAI_RESEARCH_MODEL).toBe("gpt-5.6-sol");
+    expect(parsed.AFTERFRAME_SOURCE_METADATA_PROBE_ENABLED).toBe(false);
   });
 
   it("allows live calls only through an explicit shadow-mode switch", () => {
@@ -27,6 +28,7 @@ describe("server environment", () => {
       ...environment,
       AFTERFRAME_RESEARCH_MODE: "shadow",
       OPENAI_RESEARCH_MODEL: "gpt-5.6-terra",
+      AFTERFRAME_SOURCE_METADATA_PROBE_ENABLED: "true",
     });
 
     expect(serverEnvironmentReadiness(parsed)).toEqual({
@@ -36,6 +38,7 @@ describe("server environment", () => {
       tmdbConfigured: true,
       supabaseConfigured: true,
       databaseConfigured: true,
+      sourceMetadataProbeEnabled: true,
     });
   });
 

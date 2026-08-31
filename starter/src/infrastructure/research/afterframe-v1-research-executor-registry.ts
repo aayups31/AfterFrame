@@ -22,6 +22,10 @@ import {
   type OpenAIBackgroundDiscoveryOptions,
 } from "@/infrastructure/research/openai-background-discovery";
 import { Sha256ResearchRunFingerprintAdapter } from "@/infrastructure/research/research-run-fingerprints";
+import {
+  createNodePublicSourceMetadataResolver,
+  type NodePublicSourceMetadataProbeOptions,
+} from "@/infrastructure/research/node-public-source-metadata-probe";
 
 const DEFAULT_TMDB_TIMEOUT_MS = 10_000;
 
@@ -184,10 +188,17 @@ export type AfterFrameV1ResearchExecutorRegistryOptions = Readonly<{
     maxPollsPerExecution?: number;
     delay?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
   }>;
-  resolution?: Readonly<{
-    resolver: SourceCandidateResolver;
-    maxCandidatesPerExecution?: number;
-  }>;
+  resolution?:
+    | Readonly<{
+        resolver: SourceCandidateResolver;
+        publicMetadataProbe?: never;
+        maxCandidatesPerExecution?: number;
+      }>
+    | Readonly<{
+        resolver?: never;
+        publicMetadataProbe: NodePublicSourceMetadataProbeOptions;
+        maxCandidatesPerExecution?: number;
+      }>;
 }>;
 
 /**
@@ -261,13 +272,22 @@ export function createAfterFrameV1ResearchExecutorRegistry(
           actorId: options.actorId,
           invokeRpc: options.invokeRpc,
         });
+  const sourceResolver =
+    options.resolution === undefined
+      ? null
+      : options.resolution.resolver ??
+        createNodePublicSourceMetadataResolver(
+          options.resolution.publicMetadataProbe,
+        );
   const resolutionExecutor =
-    options.resolution === undefined || resolutionPersistence === null
+    options.resolution === undefined ||
+    resolutionPersistence === null ||
+    sourceResolver === null
       ? null
       : new SourceResolutionStageExecutor({
           context: resolutionPersistence,
           records: resolutionPersistence,
-          resolver: options.resolution.resolver,
+          resolver: sourceResolver,
           fingerprints: new Sha256ResearchRunFingerprintAdapter(),
           execution: afterFrameV1SourceResolutionExecutionPlan(),
           now: () => now().toISOString(),
@@ -326,6 +346,9 @@ export function createAfterFrameV1ShadowResearchExecutorRegistry(
       : { resolverTimeoutMs: options.resolverTimeoutMs }),
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.createId === undefined ? {} : { createId: options.createId }),
+    ...(options.resolution === undefined
+      ? {}
+      : { resolution: options.resolution }),
     discovery: {
       provider,
       requestedModel: options.requestedModel,
