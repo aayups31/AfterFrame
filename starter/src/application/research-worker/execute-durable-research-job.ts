@@ -71,6 +71,12 @@ import {
   type DurablePdfNormalizationRecord,
   type StoredPdfNormalizationRecord,
 } from "@/core/research/pdf-normalization";
+import {
+  DurableExactLocatorVerificationRecordSchema,
+  ExactLocatorVerificationAcceptanceResultSchema,
+  type DurableExactLocatorVerificationRecord,
+  type StoredExactLocatorVerificationRecord,
+} from "@/core/research/exact-locator-verification";
 
 export type ResearchWorkerIdentifierKind =
   | "research_attempt"
@@ -1236,6 +1242,68 @@ export function createDurableResearchWorkerService(
       });
     };
 
+    const acceptExactLocatorVerification = async (
+      recordInput: DurableExactLocatorVerificationRecord,
+    ): Promise<StoredExactLocatorVerificationRecord> => {
+      const record = DurableExactLocatorVerificationRecordSchema.parse(recordInput);
+      if (
+        claim.job.stage !== "NORMALIZATION" || record.runId !== claim.run.id ||
+        record.jobId !== claim.job.id || record.attemptId !== claim.attempt.id ||
+        record.caseId !== claim.run.caseId ||
+        record.manifestFingerprint !== claim.inputManifest.manifestFingerprint
+      ) {
+        throw new DurableResearchWorkerError(
+          "CLAIM_REJECTED",
+          "Exact locator verification does not match the active normalization attempt",
+        );
+      }
+      const persistVerification = dependencies.store.acceptExactLocatorVerification;
+      if (persistVerification === undefined) {
+        throw new DurableResearchWorkerError(
+          "STORE_UNAVAILABLE",
+          "The exact-locator persistence boundary is unavailable",
+        );
+      }
+      return serialize(async () => {
+        if (authority !== "ACTIVE" || !acceptingCheckpoints) {
+          throw new LeaseAuthorityError(authority === "ACTIVE" ? "LEASE_LOST" : authority);
+        }
+        let acceptanceResult;
+        try {
+          acceptanceResult = boundaryParse(
+            ExactLocatorVerificationAcceptanceResultSchema,
+            await persistVerification.call(dependencies.store, {
+              actorId,
+              lease,
+              record,
+              leaseDurationSeconds: configuration.leaseDurationSeconds,
+            }),
+            "CLAIM_INVALID",
+            "The research store returned an invalid exact-locator acceptance",
+          );
+        } catch (error) {
+          revoke("LEASE_LOST");
+          if (error instanceof LeaseAuthorityError) throw error;
+          throw new LeaseAuthorityError("LEASE_LOST");
+        }
+        if (acceptanceResult.status === "COMMITTED" || acceptanceResult.status === "REPLAY") {
+          const acceptedRecord = Object.fromEntries(
+            Object.entries(acceptanceResult.record).filter(
+              ([key]) => key !== "verificationFingerprint" && key !== "acceptedAt",
+            ),
+          );
+          if (!leaseContinues(lease, acceptanceResult.lease) || JSON.stringify(acceptedRecord) !== JSON.stringify(record)) {
+            revoke("LEASE_LOST");
+            throw new LeaseAuthorityError("LEASE_LOST");
+          }
+          lease = acceptanceResult.lease;
+          return acceptanceResult.record;
+        }
+        revoke(acceptanceResult.status);
+        throw new LeaseAuthorityError(acceptanceResult.status);
+      });
+    };
+
     const maintenance = (async () => {
       while (authority === "ACTIVE") {
         try {
@@ -1281,6 +1349,7 @@ export function createDurableResearchWorkerService(
           acceptSourceRetrieval,
           acceptSourceNormalization,
           acceptPdfNormalization,
+          acceptExactLocatorVerification,
         }),
       )
       .then(

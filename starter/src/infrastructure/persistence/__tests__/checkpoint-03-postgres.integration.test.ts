@@ -32,6 +32,7 @@ import { SupabaseResearchIdentityReader } from "@/infrastructure/persistence/sup
 import { SupabaseSourceRetrievalPersistence } from "@/infrastructure/persistence/supabase-source-retrieval-persistence";
 import { SupabaseSourceNormalizationPersistence } from "@/infrastructure/persistence/supabase-source-normalization-persistence";
 import { SupabasePdfNormalizationPersistence } from "@/infrastructure/persistence/supabase-pdf-normalization-persistence";
+import { SupabaseExactLocatorVerificationPersistence } from "@/infrastructure/persistence/supabase-exact-locator-verification-persistence";
 import {
   afterFrameV1IdentityExecutionPlan,
   afterFrameV1ScopingExecutionPlan,
@@ -41,6 +42,7 @@ import {
 import { DeterministicSourceMetadataResolver } from "@/infrastructure/research/deterministic-source-metadata-resolver";
 import { DeterministicHostileDocumentNormalizer } from "@/infrastructure/research/deterministic-hostile-document-normalizer";
 import { PdfJsHostileDocumentExtractor } from "@/infrastructure/research/pdfjs-hostile-document-extractor";
+import { DeterministicExactLocatorVerifier } from "@/infrastructure/research/deterministic-exact-locator-verifier";
 import { openAIBackgroundDiscoveryExecutionIdentity } from "@/infrastructure/research/openai-background-discovery";
 import { afterFrameV1SpecialistRegistry } from "@/specialists/registry";
 
@@ -54,20 +56,29 @@ const durableResolutionLifecycleEnabled =
   process.env.AFTERFRAME_DB_MIGRATION_015_PREFLIGHT === "1" ||
   process.env.AFTERFRAME_DB_NORMALIZATION_INTEGRATION === "1" ||
   process.env.AFTERFRAME_DB_MIGRATION_016_PREFLIGHT === "1" ||
-  process.env.AFTERFRAME_DB_PDF_NORMALIZATION_INTEGRATION === "1";
+  process.env.AFTERFRAME_DB_PDF_NORMALIZATION_INTEGRATION === "1" ||
+  process.env.AFTERFRAME_DB_MIGRATION_017_PREFLIGHT === "1" ||
+  process.env.AFTERFRAME_DB_LOCATOR_INTEGRATION === "1";
 const durableRetrievalLifecycleEnabled =
   process.env.AFTERFRAME_DB_MIGRATION_014_PREFLIGHT === "1" ||
   process.env.AFTERFRAME_DB_RETRIEVAL_INTEGRATION === "1" ||
   process.env.AFTERFRAME_DB_MIGRATION_015_PREFLIGHT === "1" ||
   process.env.AFTERFRAME_DB_NORMALIZATION_INTEGRATION === "1" ||
   process.env.AFTERFRAME_DB_MIGRATION_016_PREFLIGHT === "1" ||
-  process.env.AFTERFRAME_DB_PDF_NORMALIZATION_INTEGRATION === "1";
+  process.env.AFTERFRAME_DB_PDF_NORMALIZATION_INTEGRATION === "1" ||
+  process.env.AFTERFRAME_DB_MIGRATION_017_PREFLIGHT === "1" ||
+  process.env.AFTERFRAME_DB_LOCATOR_INTEGRATION === "1";
 const durableNormalizationLifecycleEnabled =
   process.env.AFTERFRAME_DB_MIGRATION_015_PREFLIGHT === "1" ||
   process.env.AFTERFRAME_DB_NORMALIZATION_INTEGRATION === "1";
 const durablePdfNormalizationLifecycleEnabled =
   process.env.AFTERFRAME_DB_MIGRATION_016_PREFLIGHT === "1" ||
-  process.env.AFTERFRAME_DB_PDF_NORMALIZATION_INTEGRATION === "1";
+  process.env.AFTERFRAME_DB_PDF_NORMALIZATION_INTEGRATION === "1" ||
+  process.env.AFTERFRAME_DB_MIGRATION_017_PREFLIGHT === "1" ||
+  process.env.AFTERFRAME_DB_LOCATOR_INTEGRATION === "1";
+const durableLocatorLifecycleEnabled =
+  process.env.AFTERFRAME_DB_MIGRATION_017_PREFLIGHT === "1" ||
+  process.env.AFTERFRAME_DB_LOCATOR_INTEGRATION === "1";
 const describeDatabase = integrationEnabled ? describe : describe.skip;
 const projectRoot = fileURLToPath(new URL("../../../../", import.meta.url));
 const rollbackSentinel = Symbol("checkpoint-03-rollback");
@@ -111,6 +122,10 @@ const durablePdfNormalizationMigration = readFileSync(
   fileURLToPath(new URL("../../../../supabase/migrations/016_durable_pdf_normalization_acceptance.sql", import.meta.url)),
   "utf8",
 );
+const durableExactLocatorMigration = readFileSync(
+  fileURLToPath(new URL("../../../../supabase/migrations/017_durable_exact_locator_verification.sql", import.meta.url)),
+  "utf8",
+);
 
 const checkpoint03RpcNames = [
   "af_get_case_v1",
@@ -142,6 +157,8 @@ const allowedRpcNames = new Set<string>([
   "af_accept_source_normalization_v1",
   "af_get_pdf_normalization_records_v1",
   "af_accept_pdf_normalization_v1",
+  "af_get_exact_locator_verifications_v1",
+  "af_accept_exact_locator_verification_v1",
 ]);
 
 function loadDatabaseUrl() {
@@ -651,6 +668,9 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
           if (process.env.AFTERFRAME_DB_MIGRATION_016_PREFLIGHT === "1") {
             await client.query(durablePdfNormalizationMigration);
           }
+          if (process.env.AFTERFRAME_DB_MIGRATION_017_PREFLIGHT === "1") {
+            await client.query(durableExactLocatorMigration);
+          }
           await seedCase(client, investigationCase, rootBranch);
           const invokeRpc = transactionalRpcInvoker(client, (failure) => {
             rpcFailure = failure;
@@ -1016,6 +1036,9 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
           }
           if (process.env.AFTERFRAME_DB_MIGRATION_016_PREFLIGHT === "1") {
             await client.query(durablePdfNormalizationMigration);
+          }
+          if (process.env.AFTERFRAME_DB_MIGRATION_017_PREFLIGHT === "1") {
+            await client.query(durableExactLocatorMigration);
           }
           await seedCase(client, investigationCase, rootBranch);
           const invokeRpc = transactionalRpcInvoker(client, (failure) => {
@@ -1933,6 +1956,242 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
                   leaseDurationSeconds: 60,
                 });
                 expect(replayedPdf?.status).toBe("REPLAY");
+                if (replayedPdf?.status !== "REPLAY") {
+                  throw new Error("PDF normalization did not replay exactly");
+                }
+
+                if (durableLocatorLifecycleEnabled) {
+                  const targetBlock = pdfDocument.blocks[0];
+                  if (targetBlock === undefined) {
+                    throw new Error("PDF fixture did not yield a locator target");
+                  }
+                  const verificationReceipt = await new DeterministicExactLocatorVerifier().verifyPdf({
+                    id: randomUUID(),
+                    normalizationRecordId: pdfRecord.id,
+                    source: pdfSource.source,
+                    currentLocator: pdfSource.locator,
+                    normalizationReceipt: pdfReceipt,
+                    body: pdfBody,
+                    verifiedAt: await databaseTimestamp(client),
+                    proposal: {
+                      schemaVersion: 1,
+                      normalizationRecordId: pdfRecord.id,
+                      blockOrdinal: targetBlock.ordinal,
+                      expectedDocumentFingerprint: pdfDocument.documentFingerprint,
+                      expectedTextFingerprint: targetBlock.textFingerprint,
+                      expectedAnchorFingerprint: targetBlock.anchor.anchorFingerprint,
+                      instructionAuthority: "NONE",
+                      publicationAuthority: "NONE",
+                    },
+                  });
+                  const verificationRecord = {
+                    schemaVersion: 1 as const,
+                    id: randomUUID(),
+                    runId: retrievalContext.runId,
+                    jobId: retrievalContext.jobId,
+                    attemptId: retrievalContext.attemptId,
+                    caseId: retrievalContext.caseId,
+                    manifestFingerprint: retrievalContext.manifestFingerprint,
+                    normalizationRecordId: pdfRecord.id,
+                    targetBlockOrdinal: targetBlock.ordinal,
+                    idempotencyKey: `checkpoint-04e:verify:${pdfRecord.id}:${targetBlock.ordinal}`,
+                    verifier: verificationReceipt.verifier,
+                    result: { status: "VERIFIED_EXACT" as const, receipt: verificationReceipt },
+                    createdAt: await databaseTimestamp(client),
+                  };
+                  const staleVerification = await workerStore.acceptExactLocatorVerification?.({
+                    actorId,
+                    lease: acceptedPdf.lease,
+                    record: verificationRecord,
+                    leaseDurationSeconds: 60,
+                  });
+                  expect(staleVerification).toEqual({ status: "LEASE_LOST" });
+                  const acceptedVerification = await workerStore.acceptExactLocatorVerification?.({
+                    actorId,
+                    lease: replayedPdf.lease,
+                    record: verificationRecord,
+                    leaseDurationSeconds: 60,
+                  });
+                  expect(acceptedVerification?.status).toBe("COMMITTED");
+                  if (acceptedVerification?.status !== "COMMITTED") {
+                    throw new Error("Exact locator verification was not committed");
+                  }
+                  const replayedVerification = await workerStore.acceptExactLocatorVerification?.({
+                    actorId,
+                    lease: acceptedVerification.lease,
+                    record: verificationRecord,
+                    leaseDurationSeconds: 60,
+                  });
+                  expect(replayedVerification?.status).toBe("REPLAY");
+                  if (replayedVerification?.status !== "REPLAY") {
+                    throw new Error("Exact PDF locator verification did not replay exactly");
+                  }
+
+                  const webSource = firstSource.source.medium === "WEBPAGE" ? firstSource : secondSource;
+                  const webAccepted = firstSource.source.medium === "WEBPAGE"
+                    ? firstAccepted.record
+                    : secondAccepted.record;
+                  const webBody = firstSource.source.medium === "WEBPAGE" ? firstBody : secondBody;
+                  if (webSource.source.medium !== "WEBPAGE" || webAccepted.result.status !== "RETRIEVED") {
+                    throw new Error("Web locator verification requires a retrieved web source");
+                  }
+                  const webDocument = new DeterministicHostileDocumentNormalizer().normalize({
+                    snapshotId: webAccepted.result.receipt.snapshotId,
+                    sourceId: webAccepted.result.receipt.sourceId,
+                    sourceLocatorId: webAccepted.result.receipt.sourceLocatorId,
+                    contentFingerprint: webAccepted.result.receipt.contentFingerprint,
+                    verifiedMediaType: webAccepted.result.receipt.verifiedMediaType,
+                    body: webBody,
+                    normalizedAt: await databaseTimestamp(client),
+                  });
+                  const webReceipt = createNormalizedDocumentReceipt({
+                    id: randomUUID(),
+                    runId: retrievalContext.runId,
+                    candidateId: webSource.candidate.id,
+                    retrievalRecordId: webAccepted.id,
+                    document: webDocument,
+                    accessState: "OPEN",
+                    rightsState: "LINK_ONLY",
+                    retention: "TRANSIENT_ONLY",
+                    storageRef: null,
+                  });
+                  const webRecord = {
+                    schemaVersion: 1 as const,
+                    id: randomUUID(),
+                    runId: retrievalContext.runId,
+                    jobId: retrievalContext.jobId,
+                    attemptId: retrievalContext.attemptId,
+                    caseId: retrievalContext.caseId,
+                    manifestFingerprint: retrievalContext.manifestFingerprint,
+                    retrievalRecordId: webAccepted.id,
+                    idempotencyKey: `checkpoint-04e:web-normalize:${webSource.candidate.id}`,
+                    normalizer: webReceipt.normalizer,
+                    result: { status: "NORMALIZED" as const, receipt: webReceipt },
+                    createdAt: await databaseTimestamp(client),
+                  };
+                  const acceptedWeb = await workerStore.acceptSourceNormalization({
+                    actorId,
+                    lease: replayedVerification.lease,
+                    record: webRecord,
+                    leaseDurationSeconds: 60,
+                  });
+                  expect(acceptedWeb.status).toBe("COMMITTED");
+                  if (acceptedWeb.status !== "COMMITTED") {
+                    throw new Error("Web normalization was not committed");
+                  }
+                  const replayedWeb = await workerStore.acceptSourceNormalization({
+                    actorId,
+                    lease: acceptedWeb.lease,
+                    record: webRecord,
+                    leaseDurationSeconds: 60,
+                  });
+                  expect(replayedWeb.status).toBe("REPLAY");
+                  if (replayedWeb.status !== "REPLAY") {
+                    throw new Error("Web normalization did not replay exactly");
+                  }
+                  const webTargetBlock = webDocument.blocks.find((block) => block.kind === "PARAGRAPH");
+                  if (webTargetBlock === undefined) {
+                    throw new Error("Web fixture did not yield a paragraph locator target");
+                  }
+                  const webVerificationReceipt = new DeterministicExactLocatorVerifier().verifyWeb({
+                    id: randomUUID(),
+                    normalizationRecordId: webRecord.id,
+                    source: webSource.source,
+                    currentLocator: webSource.locator,
+                    normalizationReceipt: webReceipt,
+                    body: webBody,
+                    verifiedAt: await databaseTimestamp(client),
+                    proposal: {
+                      schemaVersion: 1,
+                      normalizationRecordId: webRecord.id,
+                      blockOrdinal: webTargetBlock.ordinal,
+                      expectedDocumentFingerprint: webDocument.documentFingerprint,
+                      expectedTextFingerprint: webTargetBlock.textFingerprint,
+                      expectedAnchorFingerprint: webTargetBlock.sourceRangeFingerprint,
+                      instructionAuthority: "NONE",
+                      publicationAuthority: "NONE",
+                    },
+                  });
+                  const webVerificationRecord = {
+                    schemaVersion: 1 as const,
+                    id: randomUUID(),
+                    runId: retrievalContext.runId,
+                    jobId: retrievalContext.jobId,
+                    attemptId: retrievalContext.attemptId,
+                    caseId: retrievalContext.caseId,
+                    manifestFingerprint: retrievalContext.manifestFingerprint,
+                    normalizationRecordId: webRecord.id,
+                    targetBlockOrdinal: webTargetBlock.ordinal,
+                    idempotencyKey: `checkpoint-04e:verify:${webRecord.id}:${webTargetBlock.ordinal}`,
+                    verifier: webVerificationReceipt.verifier,
+                    result: { status: "VERIFIED_EXACT" as const, receipt: webVerificationReceipt },
+                    createdAt: await databaseTimestamp(client),
+                  };
+                  const acceptedWebVerification = await workerStore.acceptExactLocatorVerification?.({
+                    actorId,
+                    lease: replayedWeb.lease,
+                    record: webVerificationRecord,
+                    leaseDurationSeconds: 60,
+                  });
+                  expect(acceptedWebVerification?.status).toBe("COMMITTED");
+                  if (acceptedWebVerification?.status !== "COMMITTED") {
+                    throw new Error("Exact web locator verification was not committed");
+                  }
+                  const replayedWebVerification = await workerStore.acceptExactLocatorVerification?.({
+                    actorId,
+                    lease: acceptedWebVerification.lease,
+                    record: webVerificationRecord,
+                    leaseDurationSeconds: 60,
+                  });
+                  expect(replayedWebVerification?.status).toBe("REPLAY");
+
+                  const locatorPersistence = new SupabaseExactLocatorVerificationPersistence({ actorId, invokeRpc });
+                  const verifications = await locatorPersistence.listAcceptedExactLocatorVerifications({
+                    actorId,
+                    runId: retrievalContext.runId,
+                    jobId: retrievalContext.jobId,
+                    attemptId: retrievalContext.attemptId,
+                  });
+                  expect(verifications).toHaveLength(2);
+                  for (const [sourceContext, expectedKind] of [
+                    [pdfSource, "PDF"],
+                    [webSource, "WEBPAGE"],
+                  ] as const) {
+                    expect(verifications).toEqual(expect.arrayContaining([
+                      expect.objectContaining({
+                        result: expect.objectContaining({
+                          status: "VERIFIED_EXACT",
+                          receipt: expect.objectContaining({
+                            evidenceStatus: "NOT_EVIDENCE",
+                            verifiedLocator: expect.objectContaining({
+                              kind: expectedKind,
+                              status: "VERIFIED_EXACT",
+                              revision: 2,
+                              supersedesLocatorId: sourceContext.locator.id,
+                            }),
+                          }),
+                        }),
+                      }),
+                    ]));
+                  }
+                  const locatorCounts = await client.query<{
+                    verifications: string; exact_locators: string; evidence: string;
+                  }>(
+                    `select
+                       (select count(*)::text from public.af_exact_locator_verification_records where run_id=$1) as verifications,
+                       (select count(*)::text from public.af_source_locators locator
+                         join public.af_exact_locator_verification_records verification
+                           on verification.verified_locator_id=locator.id
+                         where verification.run_id=$1 and locator.status='VERIFIED_EXACT') as exact_locators,
+                       (select count(*)::text from public.af_evidence_fragments where created_by_run_id=$1) as evidence`,
+                    [retrievalContext.runId],
+                  );
+                  expect(locatorCounts.rows[0]).toEqual({
+                    verifications: "2",
+                    exact_locators: "2",
+                    evidence: "0",
+                  });
+                }
 
                 const pdfPersistence = new SupabasePdfNormalizationPersistence({ actorId, invokeRpc });
                 const acceptedPdfs = await pdfPersistence.listAcceptedPdfNormalizations({
@@ -1969,7 +2228,7 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
                 );
                 expect(pdfCounts.rows[0]).toEqual({
                   normalizations: "1",
-                  content_records: "1",
+                  content_records: durableLocatorLifecycleEnabled ? "2" : "1",
                   retained_documents: "0",
                 });
               }

@@ -4,10 +4,14 @@ import type { SourceLocator, SourceRecord } from "@/core/research/schemas";
 import type {
   ExactLocatorProposal,
   ExactLocatorVerificationReceipt,
+  DurableExactLocatorVerificationRecord,
+  ExactLocatorVerificationAcceptanceResult,
+  StoredExactLocatorVerificationRecord,
 } from "@/core/research/exact-locator-verification";
 
 type ExactLocatorVerificationBase = Readonly<{
   id: string;
+  normalizationRecordId: string;
   source: SourceRecord;
   currentLocator: SourceLocator;
   proposal: ExactLocatorProposal;
@@ -27,4 +31,22 @@ export type PdfExactLocatorVerificationInput = ExactLocatorVerificationBase & Re
 export interface ExactLocatorVerifier {
   verifyWeb(input: WebExactLocatorVerificationInput): ExactLocatorVerificationReceipt;
   verifyPdf(input: PdfExactLocatorVerificationInput): Promise<ExactLocatorVerificationReceipt>;
+}
+
+export interface ExactLocatorVerificationAcceptanceStore {
+  acceptExactLocatorVerification(input: Readonly<{
+    actorId: string;
+    lease: unknown;
+    record: DurableExactLocatorVerificationRecord;
+    leaseDurationSeconds: number;
+  }>): Promise<ExactLocatorVerificationAcceptanceResult>;
+}
+
+export interface ExactLocatorVerificationRecordReader {
+  listAcceptedExactLocatorVerifications(input: Readonly<{
+    actorId: string;
+    runId: string;
+    jobId: string;
+    attemptId: string;
+  }>): Promise<readonly StoredExactLocatorVerificationRecord[]>;
 }

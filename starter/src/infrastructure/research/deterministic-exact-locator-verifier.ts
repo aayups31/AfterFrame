@@ -30,6 +30,7 @@ export class ExactLocatorVerificationError extends Error {
 
 function validatedBase(input: WebExactLocatorVerificationInput | PdfExactLocatorVerificationInput) {
   const id = EntityIdSchema.parse(input.id);
+  const normalizationRecordId = EntityIdSchema.parse(input.normalizationRecordId);
   const source = SourceRecordSchema.parse(input.source);
   const locator = SourceLocatorSchema.parse(input.currentLocator);
   const proposal = ExactLocatorProposalSchema.parse(input.proposal);
@@ -41,8 +42,11 @@ function validatedBase(input: WebExactLocatorVerificationInput | PdfExactLocator
     openUrl === null || locator.openUrl !== openUrl ||
     locator.status === "UNAVAILABLE"
   ) throw new ExactLocatorVerificationError("locator-source-mismatch");
+  if (proposal.normalizationRecordId !== normalizationRecordId) {
+    throw new ExactLocatorVerificationError("locator-normalization-mismatch");
+  }
   if (openUrl === null) throw new ExactLocatorVerificationError("locator-source-mismatch");
-  return { id, source, locator, proposal, verifiedAt, openUrl };
+  return { id, normalizationRecordId, source, locator, proposal, verifiedAt, openUrl };
 }
 
 function pdfOpenUrl(value: string, pageNumber: number) {
@@ -69,13 +73,13 @@ export class DeterministicExactLocatorVerifier implements ExactLocatorVerifier {
   }
 
   verifyWeb(input: WebExactLocatorVerificationInput) {
-    const { id, source, locator, proposal, verifiedAt, openUrl } = validatedBase(input);
+    const { id, normalizationRecordId, source, locator, proposal, verifiedAt, openUrl } = validatedBase(input);
     const receipt = NormalizedDocumentReceiptSchema.parse(input.normalizationReceipt);
     if (!(["ARTICLE", "WEBPAGE"] as const).includes(source.medium as "ARTICLE" | "WEBPAGE")) {
       throw new ExactLocatorVerificationError("locator-unsupported-medium");
     }
     if (
-      receipt.id !== proposal.normalizationRecordId || receipt.sourceId !== source.id ||
+      receipt.sourceId !== source.id ||
       receipt.sourceLocatorId !== locator.id || receipt.screeningState !== "PASSED" ||
       receipt.documentFingerprint !== proposal.expectedDocumentFingerprint
     ) {
@@ -145,7 +149,7 @@ export class DeterministicExactLocatorVerifier implements ExactLocatorVerifier {
     return ExactLocatorVerificationReceiptSchema.parse({
       schemaVersion: 1,
       id,
-      normalizationRecordId: receipt.id,
+      normalizationRecordId,
       retrievalRecordId: receipt.retrievalRecordId,
       snapshotId: receipt.snapshotId,
       sourceId: source.id,
@@ -164,13 +168,13 @@ export class DeterministicExactLocatorVerifier implements ExactLocatorVerifier {
   }
 
   async verifyPdf(input: PdfExactLocatorVerificationInput) {
-    const { id, source, locator, proposal, verifiedAt, openUrl } = validatedBase(input);
+    const { id, normalizationRecordId, source, locator, proposal, verifiedAt, openUrl } = validatedBase(input);
     const receipt = PdfDocumentReceiptSchema.parse(input.normalizationReceipt);
     if (source.medium !== "PDF" || locator.kind !== "PDF") {
       throw new ExactLocatorVerificationError("locator-unsupported-medium");
     }
     if (
-      receipt.id !== proposal.normalizationRecordId || receipt.sourceId !== source.id ||
+      receipt.sourceId !== source.id ||
       receipt.sourceLocatorId !== locator.id || receipt.screeningState !== "PASSED" ||
       receipt.documentFingerprint !== proposal.expectedDocumentFingerprint
     ) {
@@ -238,7 +242,7 @@ export class DeterministicExactLocatorVerifier implements ExactLocatorVerifier {
     return ExactLocatorVerificationReceiptSchema.parse({
       schemaVersion: 1,
       id,
-      normalizationRecordId: receipt.id,
+      normalizationRecordId,
       retrievalRecordId: receipt.retrievalRecordId,
       snapshotId: receipt.snapshotId,
       sourceId: source.id,

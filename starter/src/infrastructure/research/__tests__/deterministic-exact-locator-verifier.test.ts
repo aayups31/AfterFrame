@@ -100,7 +100,8 @@ describe("DeterministicExactLocatorVerifier", () => {
     expect(block).toBeDefined();
     if (block === undefined) return;
     const verified = new DeterministicExactLocatorVerifier().verifyWeb({
-      id: randomUUID(), source: source("WEBPAGE", "https://example.org/article"),
+      id: randomUUID(), normalizationRecordId: NORMALIZATION_ID,
+      source: source("WEBPAGE", "https://example.org/article"),
       currentLocator: locator("WEBPAGE", "https://example.org/article"),
       normalizationReceipt: receipt, body, verifiedAt: VERIFIED_AT,
       proposal: {
@@ -138,7 +139,8 @@ describe("DeterministicExactLocatorVerifier", () => {
     expect(block).toBeDefined();
     if (block === undefined) return;
     const verified = await new DeterministicExactLocatorVerifier().verifyPdf({
-      id: randomUUID(), source: source("PDF", "https://example.org/report.pdf"),
+      id: randomUUID(), normalizationRecordId: NORMALIZATION_ID,
+      source: source("PDF", "https://example.org/report.pdf"),
       currentLocator: locator("PDF", "https://example.org/report.pdf"),
       normalizationReceipt: receipt, body, verifiedAt: VERIFIED_AT,
       proposal: {
@@ -175,7 +177,8 @@ describe("DeterministicExactLocatorVerifier", () => {
     expect(block).toBeDefined();
     if (block === undefined) return;
     const base = {
-      id: randomUUID(), source: source("WEBPAGE", "https://example.org/article"),
+      id: randomUUID(), normalizationRecordId: NORMALIZATION_ID,
+      source: source("WEBPAGE", "https://example.org/article"),
       currentLocator: locator("WEBPAGE", "https://example.org/article"),
       normalizationReceipt: receipt, body, verifiedAt: VERIFIED_AT,
       proposal: {
@@ -227,7 +230,8 @@ describe("DeterministicExactLocatorVerifier", () => {
     expect(heading).toBeDefined();
     if (heading === undefined) return;
     expect(() => new DeterministicExactLocatorVerifier().verifyWeb({
-      id: randomUUID(), source: source("WEBPAGE", "https://example.org/article"),
+      id: randomUUID(), normalizationRecordId: NORMALIZATION_ID,
+      source: source("WEBPAGE", "https://example.org/article"),
       currentLocator: locator("WEBPAGE", "https://example.org/article"),
       normalizationReceipt: receipt, body, verifiedAt: VERIFIED_AT,
       proposal: {

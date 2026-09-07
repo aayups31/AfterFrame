@@ -138,6 +138,9 @@ export class PdfJsHostileDocumentExtractor implements PdfDocumentExtractor {
     if (new TextDecoder("ascii").decode(input.body.subarray(0, 5)) !== "%PDF-") {
       throw new PdfExtractionError("pdf-malformed");
     }
+    if (this.#limits.deadlineMilliseconds <= 0) {
+      throw new PdfExtractionError("pdf-timeout");
+    }
 
     const deadline = Date.now() + this.#limits.deadlineMilliseconds;
     const loadingTask = getDocument({

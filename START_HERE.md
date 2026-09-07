@@ -25,7 +25,7 @@ Do not implement until you can explain all four statements:
 
 `prototype/`, the current starter components, diagrams, storyboards, and premium visual specifications are vision experiments. They may suggest atmosphere or interaction hypotheses, but they do not prescribe the production interface.
 
-The existing starter UI is a mocked vertical slice, not a production research engine. The current durable production work begins in `docs/48-build-checkpoint-04b.md`; the latest completed slice is `docs/65-build-checkpoint-04d-durable-pdf-normalization.md`. Its boundaries, not the mock UI types or routes, are the implementation starting point. Migrations 001–016 are deployed. The next gate is independent exact webpage-passage and PDF page-region verification, followed by cue, timecode, book-edition/page, and identified-film-cut locators; paid live discovery and the public route remain disabled.
+The existing starter UI is a mocked vertical slice, not a production research engine. The current durable production work begins in `docs/48-build-checkpoint-04b.md`; the latest completed slice is `docs/66-build-checkpoint-04e-durable-exact-locator-verification.md`. Its boundaries, not the mock UI types or routes, are the implementation starting point. Migrations 001–017 are deployed. Exact webpage-passage and PDF page-region verification is durable and still explicitly not evidence. The next gate is evidence-fragment acceptance from verified locators, followed by claim verification and independence/contradiction handling; cue, timecode, book-edition/page, and identified-film-cut locators remain dedicated future resolver adapters. Paid live discovery and the public route remain disabled.
 
 To run it:
 

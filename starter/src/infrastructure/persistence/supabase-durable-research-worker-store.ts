@@ -14,6 +14,7 @@ import type {
   AcceptSourceRetrievalInput,
   AcceptSourceNormalizationInput,
   AcceptPdfNormalizationInput,
+  AcceptExactLocatorVerificationInput,
   ClaimResearchJobInput,
   CompleteDurableResearchJobInput,
   DurableResearchWorkerStore,
@@ -38,6 +39,10 @@ import {
   DurablePdfNormalizationRecordSchema,
   PdfNormalizationAcceptanceResultSchema,
 } from "@/core/research/pdf-normalization";
+import {
+  DurableExactLocatorVerificationRecordSchema,
+  ExactLocatorVerificationAcceptanceResultSchema,
+} from "@/core/research/exact-locator-verification";
 import {
   ResearchJobCheckpointResultSchema,
   ResearchJobClaimResultSchema,
@@ -322,6 +327,24 @@ export class SupabaseDurableResearchWorkerStore
       p_lease_seconds: input.leaseDurationSeconds,
     });
     return parseRpcContract(PdfNormalizationAcceptanceResultSchema, data);
+  }
+
+  async acceptExactLocatorVerification(input: AcceptExactLocatorVerificationInput) {
+    this.#assertActor(input.actorId);
+    if (!Number.isInteger(input.leaseDurationSeconds) || input.leaseDurationSeconds < 5 || input.leaseDurationSeconds > 900) {
+      throw new SupabaseDurableResearchWorkerError(
+        "INVALID_ATOMIC_MUTATION",
+        "The exact-locator lease duration is invalid",
+      );
+    }
+    const record = parseCommand(DurableExactLocatorVerificationRecordSchema, input.record);
+    const data = await this.#rpc("af_accept_exact_locator_verification_v1", {
+      p_actor_id: this.#actorId,
+      p_lease: input.lease,
+      p_record: record,
+      p_lease_seconds: input.leaseDurationSeconds,
+    });
+    return parseRpcContract(ExactLocatorVerificationAcceptanceResultSchema, data);
   }
 
   async completeResearchJob(input: CompleteDurableResearchJobInput) {

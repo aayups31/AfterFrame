@@ -50,6 +50,11 @@ import type {
   PdfNormalizationAcceptanceResult,
   StoredPdfNormalizationRecord,
 } from "@/core/research/pdf-normalization";
+import type {
+  DurableExactLocatorVerificationRecord,
+  ExactLocatorVerificationAcceptanceResult,
+  StoredExactLocatorVerificationRecord,
+} from "@/core/research/exact-locator-verification";
 
 export const START_RESEARCH_RUN_COMMAND = "start_research_run" as const;
 
@@ -222,6 +227,13 @@ export type AcceptPdfNormalizationInput = Readonly<{
   leaseDurationSeconds: number;
 }>;
 
+export type AcceptExactLocatorVerificationInput = Readonly<{
+  actorId: string;
+  lease: ResearchJobLeaseCursor;
+  record: DurableExactLocatorVerificationRecord;
+  leaseDurationSeconds: number;
+}>;
+
 export type CompleteDurableResearchJobInput = Readonly<{
   actorId: string;
   lease: ResearchJobLeaseCursor;
@@ -273,6 +285,9 @@ export interface DurableResearchWorkerStore {
   acceptPdfNormalization?(
     input: AcceptPdfNormalizationInput,
   ): Promise<PdfNormalizationAcceptanceResult>;
+  acceptExactLocatorVerification?(
+    input: AcceptExactLocatorVerificationInput,
+  ): Promise<ExactLocatorVerificationAcceptanceResult>;
   completeResearchJob(
     input: CompleteDurableResearchJobInput,
   ): Promise<ResearchJobCompletionResult>;
@@ -313,6 +328,10 @@ export type DurableResearchStageExecutionInput = Readonly<{
   acceptPdfNormalization?: (
     record: DurablePdfNormalizationRecord,
   ) => Promise<StoredPdfNormalizationRecord>;
+  /** Serialized, text-free exact-locator acceptance; still not evidence. */
+  acceptExactLocatorVerification?: (
+    record: DurableExactLocatorVerificationRecord,
+  ) => Promise<StoredExactLocatorVerificationRecord>;
 }>;
 
 /** External adapters sit behind this port; the application worker calls no provider directly. */
