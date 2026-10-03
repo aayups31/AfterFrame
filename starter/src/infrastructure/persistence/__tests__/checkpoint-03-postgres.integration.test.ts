@@ -49,7 +49,10 @@ import { afterFrameV1SpecialistRegistry } from "@/specialists/registry";
 
 const integrationEnabled =
   process.env.AFTERFRAME_DB_INTEGRATION === "1";
+const coordinateGuardEnabled = process.env.AFTERFRAME_DB_MIGRATION_018_PREFLIGHT === "1" ||
+  process.env.AFTERFRAME_DB_COORDINATE_INTEGRATION === "1";
 const durableResolutionLifecycleEnabled =
+  coordinateGuardEnabled ||
   process.env.AFTERFRAME_DB_MIGRATION_013_PREFLIGHT === "1" ||
   process.env.AFTERFRAME_DB_RESOLUTION_INTEGRATION === "1" ||
   process.env.AFTERFRAME_DB_MIGRATION_014_PREFLIGHT === "1" ||
@@ -61,6 +64,7 @@ const durableResolutionLifecycleEnabled =
   process.env.AFTERFRAME_DB_MIGRATION_017_PREFLIGHT === "1" ||
   process.env.AFTERFRAME_DB_LOCATOR_INTEGRATION === "1";
 const durableRetrievalLifecycleEnabled =
+  coordinateGuardEnabled ||
   process.env.AFTERFRAME_DB_MIGRATION_014_PREFLIGHT === "1" ||
   process.env.AFTERFRAME_DB_RETRIEVAL_INTEGRATION === "1" ||
   process.env.AFTERFRAME_DB_MIGRATION_015_PREFLIGHT === "1" ||
@@ -73,11 +77,13 @@ const durableNormalizationLifecycleEnabled =
   process.env.AFTERFRAME_DB_MIGRATION_015_PREFLIGHT === "1" ||
   process.env.AFTERFRAME_DB_NORMALIZATION_INTEGRATION === "1";
 const durablePdfNormalizationLifecycleEnabled =
+  coordinateGuardEnabled ||
   process.env.AFTERFRAME_DB_MIGRATION_016_PREFLIGHT === "1" ||
   process.env.AFTERFRAME_DB_PDF_NORMALIZATION_INTEGRATION === "1" ||
   process.env.AFTERFRAME_DB_MIGRATION_017_PREFLIGHT === "1" ||
   process.env.AFTERFRAME_DB_LOCATOR_INTEGRATION === "1";
 const durableLocatorLifecycleEnabled =
+  coordinateGuardEnabled ||
   process.env.AFTERFRAME_DB_MIGRATION_017_PREFLIGHT === "1" ||
   process.env.AFTERFRAME_DB_LOCATOR_INTEGRATION === "1";
 const describeDatabase = integrationEnabled ? describe : describe.skip;
@@ -125,6 +131,10 @@ const durablePdfNormalizationMigration = readFileSync(
 );
 const durableExactLocatorMigration = readFileSync(
   fileURLToPath(new URL("../../../../supabase/migrations/017_durable_exact_locator_verification.sql", import.meta.url)),
+  "utf8",
+);
+const exactLocatorCoordinateMigration = readFileSync(
+  fileURLToPath(new URL("../../../../supabase/migrations/018_exact_locator_coordinate_guard.sql", import.meta.url)),
   "utf8",
 );
 
@@ -672,6 +682,9 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
           if (process.env.AFTERFRAME_DB_MIGRATION_017_PREFLIGHT === "1") {
             await client.query(durableExactLocatorMigration);
           }
+          if (process.env.AFTERFRAME_DB_MIGRATION_018_PREFLIGHT === "1") {
+            await client.query(exactLocatorCoordinateMigration);
+          }
           await seedCase(client, investigationCase, rootBranch);
           const invokeRpc = transactionalRpcInvoker(client, (failure) => {
             rpcFailure = failure;
@@ -1040,6 +1053,9 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
           }
           if (process.env.AFTERFRAME_DB_MIGRATION_017_PREFLIGHT === "1") {
             await client.query(durableExactLocatorMigration);
+          }
+          if (process.env.AFTERFRAME_DB_MIGRATION_018_PREFLIGHT === "1") {
+            await client.query(exactLocatorCoordinateMigration);
           }
           await seedCase(client, investigationCase, rootBranch);
           const invokeRpc = transactionalRpcInvoker(client, (failure) => {
@@ -1962,6 +1978,21 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
                 }
 
                 if (durableLocatorLifecycleEnabled) {
+                  const rejectAlteredCoordinates = async (record: unknown, lease: unknown) => {
+                    const before = await client.query("select count(*) from public.af_source_locators");
+                    await client.query("savepoint coordinate_rejection");
+                    try {
+                      await expect(client.query(
+                        "select public.af_accept_exact_locator_verification_v1($1,$2::jsonb,$3::jsonb,60)",
+                        [actorId, JSON.stringify(lease), JSON.stringify(record)],
+                      )).rejects.toMatchObject({ code: "AFR07" });
+                    } finally {
+                      await client.query("rollback to savepoint coordinate_rejection");
+                      await client.query("release savepoint coordinate_rejection");
+                    }
+                    const after = await client.query("select count(*) from public.af_source_locators");
+                    expect(after.rows).toEqual(before.rows);
+                  };
                   const targetBlock = pdfDocument.blocks[0];
                   if (targetBlock === undefined) {
                     throw new Error("PDF fixture did not yield a locator target");
@@ -2007,6 +2038,29 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
                     leaseDurationSeconds: 60,
                   });
                   expect(staleVerification).toEqual({ status: "LEASE_LOST" });
+                  if (coordinateGuardEnabled) {
+                    for (const mutate of [
+                      (value: typeof verificationRecord) => {
+                        if (value.result.receipt.target.kind === "PDF") value.result.receipt.target.anchor.boundingBox.x += 1;
+                      },
+                      (value: typeof verificationRecord) => {
+                        if (value.result.receipt.target.kind === "PDF") value.result.receipt.target.anchor.itemEnd += 1;
+                      },
+                      (value: typeof verificationRecord) => {
+                        if (value.result.receipt.target.kind === "PDF") value.result.receipt.target.pageStructureFingerprint = "0".repeat(64);
+                      },
+                      (value: typeof verificationRecord) => {
+                        if (value.result.receipt.verifiedLocator.kind === "PDF") value.result.receipt.verifiedLocator.documentVersionId = `snapshot:${randomUUID()}`;
+                      },
+                      (value: typeof verificationRecord) => {
+                        if (value.result.receipt.verifiedLocator.kind === "PDF") value.result.receipt.verifiedLocator.printedPageLabel = "Unverified page label";
+                      },
+                    ]) {
+                      const altered = structuredClone(verificationRecord);
+                      mutate(altered);
+                      await rejectAlteredCoordinates(altered, replayedPdf.lease);
+                    }
+                  }
                   const acceptedVerification = await workerStore.acceptExactLocatorVerification?.({
                     actorId,
                     lease: replayedPdf.lease,
@@ -2128,6 +2182,28 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
                     result: { status: "VERIFIED_EXACT" as const, receipt: webVerificationReceipt },
                     createdAt: await databaseTimestamp(client),
                   };
+                  if (coordinateGuardEnabled) {
+                    for (const mutate of [
+                      (value: typeof webVerificationRecord) => {
+                        if (value.result.receipt.target.kind !== "PDF") value.result.receipt.target.sourceByteStart += 1;
+                      },
+                      (value: typeof webVerificationRecord) => {
+                        if (value.result.receipt.target.kind !== "PDF") value.result.receipt.target.sourceByteEnd += 1;
+                      },
+                      (value: typeof webVerificationRecord) => {
+                        if (value.result.receipt.target.kind !== "PDF") value.result.receipt.target.headingPathFingerprints = ["0".repeat(64)];
+                      },
+                      (value: typeof webVerificationRecord) => {
+                        if (value.result.receipt.target.kind !== "PDF") value.result.receipt.target.paragraphIndex += 1;
+                        const locator = value.result.receipt.verifiedLocator;
+                        if (locator.kind === "WEBPAGE" || locator.kind === "ARTICLE") locator.paragraphIndex = (locator.paragraphIndex ?? 0) + 1;
+                      },
+                    ]) {
+                      const altered = structuredClone(webVerificationRecord);
+                      mutate(altered);
+                      await rejectAlteredCoordinates(altered, replayedWeb.lease);
+                    }
+                  }
                   const acceptedWebVerification = await workerStore.acceptExactLocatorVerification?.({
                     actorId,
                     lease: replayedWeb.lease,

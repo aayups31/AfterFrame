@@ -2,6 +2,11 @@
 
 Status: checkpoint 04F.1, verified passage preparation.
 
+Migration 018 adds database coordinate hardening and is pending live validation
+and deployment because the configured database connection is timing out. See
+`docs/69-exact-locator-coordinate-hardening.md`. This does not advance the major
+phase or change the last confirmed 001–017 schema baseline.
+
 The canonical plan is `docs/23-final-build-plan.md`. It defines eight major
 phases, numbered 0 through 7. Numbered build checkpoints such as 04E.1 and 04F.1
 are engineering slices inside those phases, not additional product phases or

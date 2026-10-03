@@ -29,6 +29,11 @@ The existing starter UI is a mocked vertical slice, not a production research en
 
 To run it:
 
+Pending database hardening: migration 018 and its tampering tests are prepared,
+but its live predeploy check is blocked by a database connection timeout. Do not
+count it as deployed; see `docs/69-exact-locator-coordinate-hardening.md` for
+the exact resume sequence.
+
 ```bash
 cd starter
 nvm use
