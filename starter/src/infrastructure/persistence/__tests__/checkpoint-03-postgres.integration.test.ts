@@ -43,6 +43,7 @@ import { DeterministicSourceMetadataResolver } from "@/infrastructure/research/d
 import { DeterministicHostileDocumentNormalizer } from "@/infrastructure/research/deterministic-hostile-document-normalizer";
 import { PdfJsHostileDocumentExtractor } from "@/infrastructure/research/pdfjs-hostile-document-extractor";
 import { DeterministicExactLocatorVerifier } from "@/infrastructure/research/deterministic-exact-locator-verifier";
+import { createPostgresEvidencePassageService } from "@/infrastructure/research/postgres-evidence-passage-service";
 import { openAIBackgroundDiscoveryExecutionIdentity } from "@/infrastructure/research/openai-background-discovery";
 import { afterFrameV1SpecialistRegistry } from "@/specialists/registry";
 
@@ -2153,6 +2154,28 @@ describeDatabase("checkpoint-03 real Postgres lifecycle", () => {
                     attemptId: retrievalContext.attemptId,
                   });
                   expect(verifications).toHaveLength(2);
+                  const preparePassage = createPostgresEvidencePassageService({ actorId, invokeRpc });
+                  for (const [record, body, expectedPassage] of [
+                    [verificationRecord, pdfBody, targetBlock.text],
+                    [webVerificationRecord, webBody, webTargetBlock.text],
+                  ] as const) {
+                    const prepared = await preparePassage({
+                      caseId: retrievalContext.caseId, runId: retrievalContext.runId,
+                      jobId: retrievalContext.jobId, attemptId: retrievalContext.attemptId,
+                      manifestFingerprint: retrievalContext.manifestFingerprint,
+                      verificationRecordId: record.id,
+                      selection: { start: 0, end: expectedPassage.length,
+                        expectedTextFingerprint: sha256(expectedPassage) },
+                    }, body, new AbortController().signal);
+                    expect(prepared).toMatchObject({
+                      status: "PREPARED", passage: expectedPassage,
+                      receipt: { verificationRecordId: record.id, evidenceStatus: "NOT_EVIDENCE",
+                        retention: "TRANSIENT_ONLY", publicationAuthority: "NONE" },
+                      telemetry: { modelCalls: 0, providerCostUsd: 0, privateContentIncluded: false },
+                    });
+                    if (prepared.status !== "PREPARED") throw new Error("Passage preparation failed");
+                    expect(JSON.stringify(prepared.receipt)).not.toContain(expectedPassage);
+                  }
                   for (const [sourceContext, expectedKind] of [
                     [pdfSource, "PDF"],
                     [webSource, "WEBPAGE"],
